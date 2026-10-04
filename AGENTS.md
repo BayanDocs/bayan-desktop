@@ -19,7 +19,7 @@ The plan, decisions (ADRs), specifications and work packages live in the [BayanD
 
 ## Rules specific to bayan-desktop
 
-- **Licensing (ADR-0003):** GPL-3.0-or-later. Qt stays LGPL-only even though the app is GPL (ADR-0013, amendment of 2026-10-04).
+- **Licensing (ADR-0003):** GPL-3.0-or-later with the BayanDocs App Store Permission (`GPL-3.0-or-later WITH LicenseRef-BayanDocs-App-Store-Permission`). Qt stays LGPL-only even though the app is GPL (ADR-0013, amendment of 2026-10-04). `REUSE.toml` records which license applies to which files and `LICENSES/` holds the full texts; keep `reuse lint` passing, and add a new license text only with `reuse download <SPDX-ID>`.
 - **Thin shell (ADR-0013):** no document logic here. If something would have to be implemented twice (desktop and web), it belongs in bayan-core. The shell draws the interface from the shared UI manifest, forwards input, displays engine-rendered tiles and overlays, and fulfils host-service requests.
 - **Stack:** C++20, CMake, Qt 6 Quick (QML) for the interface, C++ only as glue. Track the newest Qt 6 minor release (Qt 6.12 at planning time) per ADR-0013, pinned exactly.
 - **Qt licensing:** only LGPLv3 Qt modules, linked dynamically. Forbidden: Qt Charts, Qt Graphs, Qt GRPC, Qt Quick 3D, Qt Virtual Keyboard, Qt Canvas Painter and any other GPL-only or commercial-only module or tool. Compile QML with `qmlcachegen`, not the commercial `qmlsc`.
@@ -35,3 +35,5 @@ Defined by DESK-001 (a CMake workflow preset or script); until DESK-001 has land
 ## Dependency mechanisms
 
 Qt is installed in CI with aqtinstall at pinned versions with checksum verification; the Qt version and release date are recorded in a pin file checked by CI (X-003). Upgrades happen only in the monthly dependency session.
+
+In BayanDocs cloud sessions the tools are preinstalled at pinned versions by `docs/scripts/cloud-environment-setup.sh`; run `bayandocs-tools` to list them. If a tool is missing, install the version pinned there (never a newer one) and mention it in the pull request.
