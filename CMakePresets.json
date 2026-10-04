@@ -1,0 +1,184 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "BAYAN_ENGINE": "stub",
+        "BAYAN_WARNINGS_AS_ERRORS": "ON",
+        "BAYAN_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "unix",
+      "hidden": true,
+      "inherits": "base",
+      "condition": { "type": "notEquals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    {
+      "name": "dev",
+      "displayName": "Development (Debug, stub engine)",
+      "description": "Everyday development build on Linux or macOS.",
+      "inherits": "unix",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "verify",
+      "displayName": "Verification gate (optimized, with lint)",
+      "description": "The full gate: optimized build with warnings as errors, clang-format, clang-tidy, qmllint and all tests. Needs the pinned tools from scripts/dev-setup.sh.",
+      "inherits": "unix",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo", "BAYAN_LINT": "ON" }
+    },
+    {
+      "name": "ci",
+      "displayName": "CI build without lint (optimized)",
+      "description": "Used by CI on macOS, where the lint checks are not repeated.",
+      "inherits": "unix",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+    },
+    {
+      "name": "asan",
+      "displayName": "AddressSanitizer and UndefinedBehaviorSanitizer (Linux)",
+      "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "BAYAN_SANITIZERS": "address;undefined" }
+    },
+    {
+      "name": "msvc",
+      "displayName": "Windows (MSVC, optimized)",
+      "description": "Run from a Visual Studio developer environment (x64), so that cl.exe is found.",
+      "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo", "CMAKE_CXX_COMPILER": "cl" }
+    },
+    {
+      "name": "engine-sdk",
+      "displayName": "Against the bayan-core C SDK (optimized)",
+      "description": "Links the engine from the C SDK unpacked at the directory in the BAYAN_ENGINE_SDK_DIR environment variable (layout: src/engine/README.md). scripts/test-engine-sdk.sh runs it with a stand-in SDK built from the stub engine.",
+      "inherits": "unix",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo", "BAYAN_ENGINE": "sdk", "BAYAN_ENGINE_SDK_DIR": "$env{BAYAN_ENGINE_SDK_DIR}" }
+    },
+    {
+      "name": "engine-sdk-msvc",
+      "displayName": "Against the bayan-core C SDK (Windows, MSVC, optimized)",
+      "description": "As engine-sdk, on Windows; run from a Visual Studio developer environment (x64).",
+      "inherits": "msvc",
+      "cacheVariables": { "BAYAN_ENGINE": "sdk", "BAYAN_ENGINE_SDK_DIR": "$env{BAYAN_ENGINE_SDK_DIR}" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "dev", "configurePreset": "dev" },
+    { "name": "verify", "configurePreset": "verify" },
+    {
+      "name": "verify-lint",
+      "displayName": "Lint (clang-format, clang-tidy, qmllint)",
+      "configurePreset": "verify",
+      "targets": ["format-check", "tidy", "all_qmllint"]
+    },
+    { "name": "ci", "configurePreset": "ci" },
+    { "name": "asan", "configurePreset": "asan" },
+    { "name": "msvc", "configurePreset": "msvc" },
+    { "name": "engine-sdk", "configurePreset": "engine-sdk" },
+    { "name": "engine-sdk-msvc", "configurePreset": "engine-sdk-msvc" }
+  ],
+  "testPresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "timeout": 300 }
+    },
+    { "name": "dev", "inherits": "base", "configurePreset": "dev" },
+    { "name": "verify", "inherits": "base", "configurePreset": "verify" },
+    { "name": "ci", "inherits": "base", "configurePreset": "ci" },
+    {
+      "name": "asan",
+      "inherits": "base",
+      "configurePreset": "asan",
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=1:strict_init_order=1:check_initialization_order=1:detect_stack_use_after_return=1",
+        "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=1",
+        "LSAN_OPTIONS": "suppressions=${sourceDir}/tests/lsan-suppressions.txt:print_suppressions=0"
+      }
+    },
+    { "name": "msvc", "inherits": "base", "configurePreset": "msvc" },
+    {
+      "name": "engine-sdk-base",
+      "hidden": true,
+      "inherits": "base",
+      "description": "Only the tests that use the engine; the others do not depend on it and run in the other presets.",
+      "filter": { "include": { "name": "^(engine|app)\\." } }
+    },
+    { "name": "engine-sdk", "inherits": "engine-sdk-base", "configurePreset": "engine-sdk" },
+    { "name": "engine-sdk-msvc", "inherits": "engine-sdk-base", "configurePreset": "engine-sdk-msvc" }
+  ],
+  "workflowPresets": [
+    {
+      "name": "dev",
+      "displayName": "Build and test (Debug)",
+      "steps": [
+        { "type": "configure", "name": "dev" },
+        { "type": "build", "name": "dev" },
+        { "type": "test", "name": "dev" }
+      ]
+    },
+    {
+      "name": "verify",
+      "displayName": "Verification gate",
+      "steps": [
+        { "type": "configure", "name": "verify" },
+        { "type": "build", "name": "verify" },
+        { "type": "build", "name": "verify-lint" },
+        { "type": "test", "name": "verify" }
+      ]
+    },
+    {
+      "name": "ci",
+      "steps": [
+        { "type": "configure", "name": "ci" },
+        { "type": "build", "name": "ci" },
+        { "type": "test", "name": "ci" }
+      ]
+    },
+    {
+      "name": "asan",
+      "displayName": "Sanitizer build and test (Linux)",
+      "steps": [
+        { "type": "configure", "name": "asan" },
+        { "type": "build", "name": "asan" },
+        { "type": "test", "name": "asan" }
+      ]
+    },
+    {
+      "name": "msvc",
+      "displayName": "Build and test with MSVC (Windows)",
+      "steps": [
+        { "type": "configure", "name": "msvc" },
+        { "type": "build", "name": "msvc" },
+        { "type": "test", "name": "msvc" }
+      ]
+    },
+    {
+      "name": "engine-sdk",
+      "displayName": "Build and test against the C SDK at $BAYAN_ENGINE_SDK_DIR",
+      "steps": [
+        { "type": "configure", "name": "engine-sdk" },
+        { "type": "build", "name": "engine-sdk" },
+        { "type": "test", "name": "engine-sdk" }
+      ]
+    },
+    {
+      "name": "engine-sdk-msvc",
+      "displayName": "Build and test against the C SDK at $BAYAN_ENGINE_SDK_DIR (Windows)",
+      "steps": [
+        { "type": "configure", "name": "engine-sdk-msvc" },
+        { "type": "build", "name": "engine-sdk-msvc" },
+        { "type": "test", "name": "engine-sdk-msvc" }
+      ]
+    }
+  ]
+}

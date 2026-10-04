@@ -1,0 +1,11 @@
+; The functions the stand-in engine DLL exports on Windows: exactly those declared in src/engine/stub/include/bayan_ffi.h.
+EXPORTS
+  bayan_version
+  bayan_engine_new
+  bayan_engine_free
+  bayan_engine_set_callback
+  bayan_engine_post
+  bayan_blob_put
+  bayan_blob_get
+  bayan_blob_release
+  bayan_render_tile

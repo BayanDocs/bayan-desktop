@@ -1,0 +1,2 @@
+# Unix line endings everywhere, including Windows checkouts: scripts/dev-setup.sh runs under bash on every platform, and MSVC reads LF fine.
+* text=auto eol=lf

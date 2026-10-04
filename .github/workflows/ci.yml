@@ -1,0 +1,138 @@
+# Build, lint and test bayan-desktop on Linux, macOS and Windows (DESK-001).
+# Every tool is pinned and verified: actions by full commit SHA, Python and the build tools by exact version and hash (deps/), Qt by exact
+# version through scripts/install-qt.py, which checks each archive against the SHA-256 published on download.qt.io (ADR-0017).
+# scripts/dev-setup.sh does the installing, so CI uses exactly what developers and cloud sessions use. scripts/test-engine-sdk.sh checks, on every
+# operating system, that the app also builds and passes its engine tests against a shared-library engine laid out like the bayan-core C SDK.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Ubuntu packages Qt needs to build and to run headless, from the Ubuntu archive frozen at a date (same as the cloud environment).
+  UBUNTU_SNAPSHOT: 20261003T000000Z
+  UBUNTU_PACKAGES: libgl-dev libegl-dev libvulkan-dev libxkbcommon-dev libfontconfig-dev libdbus-1-dev
+  PYTHON_VERSION: 3.14.8 # released 2026-09-30
+
+jobs:
+  linux:
+    name: Linux · verification gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: python
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install Ubuntu packages
+        run: |
+          sudo apt-get update --snapshot "$UBUNTU_SNAPSHOT"
+          # shellcheck disable=SC2086 # the package list is meant to be split into words
+          sudo apt-get install -y --no-install-recommends --snapshot "$UBUNTU_SNAPSHOT" $UBUNTU_PACKAGES
+      - name: Install pinned tools and Qt
+        run: scripts/dev-setup.sh
+        env:
+          PYTHON: ${{ steps.python.outputs.python-path }}
+      - name: Verification gate (build, clang-format, clang-tidy, qmllint, tests, headless smoke test)
+        run: cmake --workflow --preset verify
+      - name: Engine SDK path (stub built as a stand-in SDK; build and engine tests with BAYAN_ENGINE=sdk)
+        run: scripts/test-engine-sdk.sh
+
+  sanitizers:
+    name: Linux · AddressSanitizer and UndefinedBehaviorSanitizer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: python
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install Ubuntu packages
+        run: |
+          sudo apt-get update --snapshot "$UBUNTU_SNAPSHOT"
+          # shellcheck disable=SC2086 # the package list is meant to be split into words
+          sudo apt-get install -y --no-install-recommends --snapshot "$UBUNTU_SNAPSHOT" $UBUNTU_PACKAGES
+      - name: Install pinned tools and Qt
+        run: scripts/dev-setup.sh
+        env:
+          PYTHON: ${{ steps.python.outputs.python-path }}
+      - name: Sanitizer build and tests
+        run: cmake --workflow --preset asan
+
+  macos:
+    name: macOS (arm64) · build and test
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: python
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install pinned tools and Qt
+        run: scripts/dev-setup.sh
+        env:
+          PYTHON: ${{ steps.python.outputs.python-path }}
+      - name: Build and test (including the headless smoke test)
+        run: cmake --workflow --preset ci
+      - name: Engine SDK path (stub built as a stand-in SDK; build and engine tests with BAYAN_ENGINE=sdk)
+        run: scripts/test-engine-sdk.sh
+
+  windows:
+    name: Windows (MSVC) · build and test
+    runs-on: windows-2025
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: python
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install pinned tools and Qt
+        run: scripts/dev-setup.sh
+        env:
+          PYTHON: ${{ steps.python.outputs.python-path }}
+      - name: Set up the MSVC developer environment (x64)
+        shell: pwsh
+        run: |
+          # Equivalent of the "x64 Native Tools Command Prompt": run vcvars64.bat and keep the environment it sets.
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $installation = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $installation) { throw 'No Visual Studio installation with the C++ x64 tools was found.' }
+          $vcvars = Join-Path $installation 'VC\Auxiliary\Build\vcvars64.bat'
+          cmd /c "`"$vcvars`" >nul && set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$') { "$($Matches[1])=$($Matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
+          }
+      - name: Build and test (including the headless smoke test)
+        run: cmake --workflow --preset msvc
+      - name: Engine SDK path (stub built as a stand-in SDK; build and engine tests with BAYAN_ENGINE=sdk)
+        run: scripts/test-engine-sdk.sh

@@ -1,0 +1,11 @@
+# Tests use the project's checks (../.clang-tidy) except those that clash with Qt Test's conventions:
+#   readability-function-cognitive-complexity: every QVERIFY and QCOMPARE macro counts as branches.
+#   readability-convert-member-functions-to-static: Qt Test runs the private slots of the test object, so they must be member functions.
+#   misc-use-internal-linkage: moc needs the test class at namespace scope.
+#   misc-const-correctness: signal spies change whenever a signal arrives, even if the test only reads them.
+InheritParentConfig: true
+Checks: >
+  -readability-function-cognitive-complexity,
+  -readability-convert-member-functions-to-static,
+  -misc-use-internal-linkage,
+  -misc-const-correctness

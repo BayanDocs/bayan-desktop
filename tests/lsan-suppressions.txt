@@ -1,0 +1,1 @@
+# LeakSanitizer suppressions for the sanitizer job (CMakePresets.json, test preset "asan"). Only leaks inside third-party libraries may be listed here, each with a reason.
