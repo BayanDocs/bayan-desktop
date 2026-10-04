@@ -5,13 +5,22 @@ bayan-desktop's own replacement for aqtinstall (ADR-0017, amendment of 2026-10-0
 third-party code runs while Qt is installed. What it does:
 
 1. Downloads the repository index (Updates.xml) for this platform from download.qt.io and checks it against the SHA-256 published next to it.
-2. Finds the pinned Qt package in the index and the archives that deps/qt.json lists (qtbase, qtdeclarative and so on).
+   Every download refuses HTTP redirects, so files come only from the hosts named here and never from mirrors.
+2. Finds the pinned Qt package in the index, the archives that deps/qt.json lists (qtbase, qtdeclarative and so on), and where the index says
+   each one belongs (most go to the root of the installation; ICU on Linux goes to lib/).
 3. Downloads each archive from Qt's master server and checks it against the SHA-256 that download.qt.io publishes for it, the same check
    aqtinstall makes. A file whose hash does not match is never extracted.
-4. Lists every entry of the archive before extracting anything and refuses absolute paths, "..", entry types other than plain files,
-   directories and symbolic links, links that point outside the installation, and paths that pass through a link.
-5. Extracts with the pinned CMake (cmake -E tar) into a temporary directory next to the target, checks the links again, and only then moves
-   the result into place, so an interrupted run never leaves a half-installed Qt behind.
+4. Lists every entry of each archive before extracting it, and refuses the archive if any entry
+   - has an unsafe name: absolute, with a "." or ".." component or one made only of dots and spaces, or with Windows separators or a drive;
+   - is anything other than a plain file, a directory or a symbolic link;
+   - has the same name as another entry when names are compared the way macOS and Windows file systems compare them (ignoring case,
+     treating Unicode canonical equivalents as equal and ignoring trailing dots and spaces), unless both are directories;
+   - is a link whose target, resolved inside the installation, points outside it;
+   - passes through, or would replace, a link of this archive or of an archive extracted before it (compared the same way).
+5. Refuses an archive whose destination directory is or passes through a link, extracts it with the pinned CMake (cmake -E tar) into a
+   temporary directory next to the target, and then checks that no link in that directory resolves outside it (this also catches chains of
+   links) before the next archive is extracted. Only a complete installation is moved into place, so an interrupted run never leaves a
+   half-installed Qt behind.
 6. Writes bin/qt.conf as Qt's installer does, and records what it installed in .bayandocs-qt.json, so running it again with the same pins
    does nothing. (Unlike aqtinstall, it does not rewrite the build machine's paths in the pkg-config and qmake files, which a CMake build
    never reads.)
@@ -34,6 +43,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ElementTree
@@ -72,12 +82,25 @@ def ssl_context() -> ssl.SSLContext:
     return context
 
 
-def open_url(url: str, context: ssl.SSLContext):
-    """Opens a URL, retrying temporary network failures; a missing file (HTTP 4xx) fails at once."""
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """Turns every HTTP redirect into an error: download.qt.io, for example, redirects archive downloads to third-party mirrors."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise InstallError(f"{req.full_url} redirected to {newurl} (HTTP {code}); refusing it, because files must come from the server "
+                           "named in the URL")
+
+
+def make_opener() -> urllib.request.OpenerDirector:
+    """A URL opener that verifies TLS certificates, uses the proxy settings from the environment and refuses redirects."""
+    return urllib.request.build_opener(_RefuseRedirects(), urllib.request.HTTPSHandler(context=ssl_context()))
+
+
+def open_url(url: str, opener: urllib.request.OpenerDirector):
+    """Opens a URL, retrying temporary network failures; a missing file (HTTP 4xx) and a redirect fail at once."""
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     for attempt in range(1, ATTEMPTS + 1):
         try:
-            return urllib.request.urlopen(request, timeout=60, context=context)
+            return opener.open(request, timeout=60)
         except urllib.error.HTTPError as error:
             if error.code < 500 or attempt == ATTEMPTS:
                 raise InstallError(f"could not download {url}: HTTP {error.code}") from None
@@ -88,12 +111,12 @@ def open_url(url: str, context: ssl.SSLContext):
     raise AssertionError("unreachable")
 
 
-def download(url: str, limit: int, context: ssl.SSLContext, destination: Path | None = None) -> tuple[bytes, str]:
+def download(url: str, limit: int, opener: urllib.request.OpenerDirector, destination: Path | None = None) -> tuple[bytes, str]:
     """Downloads at most <limit> bytes, into <destination> if given (then the returned bytes are empty). Returns the bytes and their SHA-256."""
     digest = hashlib.sha256()
     chunks: list[bytes] = []
     size = 0
-    with open_url(url, context) as response:
+    with open_url(url, opener) as response:
         output = open(destination, "wb") if destination else None
         try:
             while chunk := response.read(1024 * 1024):
@@ -111,9 +134,9 @@ def download(url: str, limit: int, context: ssl.SSLContext, destination: Path | 
     return b"".join(chunks), digest.hexdigest()
 
 
-def published_sha256(url: str, file_name: str, context: ssl.SSLContext) -> str:
+def published_sha256(url: str, file_name: str, opener: urllib.request.OpenerDirector) -> str:
     """Reads the SHA-256 that the repository publishes for a file (<url>.sha256, in the format "<hash>  <file name>")."""
-    text, _ = download(url + ".sha256", 4096, context)
+    text, _ = download(url + ".sha256", 4096, opener)
     match = SHA256_LINE.fullmatch(text.decode("ascii", errors="replace").strip())
     if not match or match.group(2) != file_name:
         raise InstallError(f"{url}.sha256 is not a SHA-256 line for {file_name}")
@@ -163,34 +186,72 @@ def find_archives(index: bytes, package: str, qt_version: str, directory: str, w
     return version, chosen
 
 
+def fold(path: str) -> str:
+    """The form in which file systems may treat two paths as the same: macOS and Windows ignore case by default, macOS treats Unicode
+    canonical equivalents as the same name, and Windows ignores trailing dots and spaces. All checks between names compare folded paths."""
+    folded = unicodedata.normalize("NFD", unicodedata.normalize("NFD", path).casefold())
+    return "/".join(component.rstrip(". ") for component in folded.split("/"))
+
+
 def check_relative_path(name: str) -> None:
-    """Refuses archive paths that are absolute, contain "." or "..", or use Windows separators or drive letters."""
+    """Refuses archive paths that are absolute, have a component that is empty, "." or "..", or made only of dots and spaces (which Windows
+    would shorten), or use Windows separators or drive letters."""
     stripped = name[:-1] if name.endswith("/") else name
     if not stripped or stripped.startswith("/") or "\\" in name or "\0" in name or WINDOWS_DRIVE.match(stripped):
         raise InstallError(f"unsafe path in archive: {name!r}")
-    if any(part in ("", ".", "..") for part in stripped.split("/")):
+    if any(not part.rstrip(". ") for part in stripped.split("/")):
         raise InstallError(f"unsafe path in archive: {name!r}")
 
 
-def check_entries(entries: list[tuple[str, str, str | None]]) -> None:
-    """Checks (name, kind, link target) entries, where kind is "-" (file), "d" (directory) or "l" (symbolic link)."""
-    links = set()
+def install_path(subdirectory: str, name: str) -> str:
+    """The path of an archive entry inside the installation, for an archive extracted into <subdirectory> ("" for the root)."""
+    name = name.rstrip("/")
+    return f"{subdirectory}/{name}" if subdirectory else name
+
+
+def check_entries(entries: list[tuple[str, str, str | None]], subdirectory: str = "", known_links: set[str] | None = None) -> set[str]:
+    """Checks one archive's (name, kind, link target) entries before it is extracted into <subdirectory> of the installation. Kind is "-"
+    (file), "d" (directory) or "l" (symbolic link). <known_links> holds the folded installation paths of the links that archives extracted
+    earlier created. Returns the folded installation paths of this archive's links, to be added to <known_links>."""
+    known = known_links or set()
+    kinds: dict[str, str] = {}
+    links: set[str] = set()
     for name, kind, target in entries:
         check_relative_path(name)
         if kind not in ("-", "d", "l"):
             raise InstallError(f"unsupported entry type '{kind}' in archive: {name!r}")
+        path = install_path(subdirectory, name)
+        key = fold(path)
+        if key in kinds and not (kinds[key] == "d" and kind == "d"):
+            raise InstallError(f"two archive entries have the same name when case is ignored: {name!r}")
+        kinds[key] = kind
         if kind == "l":
             if not target or target.startswith("/") or "\\" in target or "\0" in target or WINDOWS_DRIVE.match(target):
                 raise InstallError(f"unsafe link in archive: {name!r} -> {target!r}")
-            resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name.rstrip("/")), target))
+            resolved = posixpath.normpath(posixpath.join(posixpath.dirname(path), target))
             if resolved == ".." or resolved.startswith("../"):
                 raise InstallError(f"link points outside the installation: {name!r} -> {target!r}")
-            links.add(name.rstrip("/"))
+            links.add(key)
+    all_links = known | links
     for name, _, _ in entries:
-        parts = name.rstrip("/").split("/")
+        parts = fold(install_path(subdirectory, name)).split("/")
         for depth in range(1, len(parts)):
-            if "/".join(parts[:depth]) in links:
+            if "/".join(parts[:depth]) in all_links:
                 raise InstallError(f"archive path passes through a link: {name!r}")
+        if "/".join(parts) in known:
+            raise InstallError(f"archive entry would replace a link of an earlier archive: {name!r}")
+    return links
+
+
+def check_destination(staging: Path, subdirectory: str, known_links: set[str]) -> None:
+    """Refuses an extraction directory that is, or passes through, a link: an earlier archive's link (compared folded), or any link on disk."""
+    if not subdirectory:
+        return
+    parts = subdirectory.split("/")
+    folded = fold(subdirectory).split("/")
+    for depth in range(1, len(parts) + 1):
+        if "/".join(folded[:depth]) in known_links or staging.joinpath(*parts[:depth]).is_symlink():
+            raise InstallError(f"the extraction directory {subdirectory!r} is or passes through a link")
 
 
 def run_cmake(cmake: str, arguments: list[str], cwd: Path | None = None) -> str:
@@ -261,11 +322,11 @@ def install(pins_path: Path, host: str, prefix: Path, cmake: str, index_base: st
         say(f"Qt {qt_version} ({' '.join(wanted)}) is already installed in {target}")
         return target
 
-    context = ssl_context()
+    opener = make_opener()
     index_url = f"{index_base}/{repository}/Updates.xml"
     say(f"reading the repository index {index_url}")
-    index, index_sha256 = download(index_url, MAX_INDEX_BYTES, context)
-    if index_sha256 != published_sha256(index_url, "Updates.xml", context):
+    index, index_sha256 = download(index_url, MAX_INDEX_BYTES, opener)
+    if index_sha256 != published_sha256(index_url, "Updates.xml", opener):
         raise InstallError(f"the SHA-256 of {index_url} does not match the published one")
     version, archives = find_archives(index, package, qt_version, directory, wanted)
 
@@ -274,21 +335,24 @@ def install(pins_path: Path, host: str, prefix: Path, cmake: str, index_base: st
     downloads = Path(tempfile.mkdtemp(prefix=".downloads-", dir=prefix))
     try:
         installed = {}
+        links: set[str] = set()  # folded installation paths of every link extracted so far
         for archive, subdirectory in archives:
             path = f"{repository}/{package}/{version}{archive}"
-            expected = published_sha256(f"{index_base}/{path}", version + archive, context)
+            expected = published_sha256(f"{index_base}/{path}", version + archive, opener)
             say(f"downloading {archive}")
             file = downloads / archive
-            _, actual = download(f"{archive_base}/{path}", max_archive_bytes, context, file)
+            _, actual = download(f"{archive_base}/{path}", max_archive_bytes, opener, file)
             if actual != expected:
                 raise InstallError(f"the SHA-256 of {archive} is {actual}, but Qt publishes {expected}; not installing it")
-            check_entries(list_entries(cmake, file))
+            check_destination(staging, subdirectory, links)
+            links |= check_entries(list_entries(cmake, file), subdirectory, links)
             destination = staging / subdirectory
             destination.mkdir(parents=True, exist_ok=True)
             run_cmake(cmake, ["-E", "tar", "xf", str(file)], cwd=destination)
             file.unlink()
+            # Before the next archive is extracted: chains of links can leave the installation even when each link stays inside on its own.
+            check_extracted_links(staging)
             installed[archive] = actual
-        check_extracted_links(staging)
         # Like aqtinstall and Qt's own installer: tell Qt's tools (qmake, qtpaths) that the installation's root is the parent of bin/.
         (staging / "bin").mkdir(exist_ok=True)
         (staging / "bin" / "qt.conf").write_text("[Paths]\nPrefix=..\n", encoding="utf-8")
