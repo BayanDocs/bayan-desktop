@@ -1,10 +1,24 @@
 {
   "qt": "6.12.0",
   "qt_released": "2026-09-30",
-  "aqtinstall": "3.3.0",
   "hosts": {
-    "linux": { "aqt_host": "linux", "arch": "linux_gcc_64", "directory": "gcc_64", "archives": ["qtbase", "qtdeclarative", "qtsvg", "qttranslations", "icu"] },
-    "macos": { "aqt_host": "mac", "arch": "clang_64", "directory": "macos", "archives": ["qtbase", "qtdeclarative", "qtsvg", "qttranslations"] },
-    "windows": { "aqt_host": "windows", "arch": "win64_msvc2022_64", "directory": "msvc2022_64", "archives": ["qtbase", "qtdeclarative", "qtsvg", "qttranslations"] }
+    "linux": {
+      "repository": "linux_x64/desktop/qt6_6120/qt6_6120",
+      "package": "qt.qt6.6120.linux_gcc_64",
+      "directory": "gcc_64",
+      "archives": ["qtbase", "qtdeclarative", "qtsvg", "qttranslations", "icu"]
+    },
+    "macos": {
+      "repository": "mac_x64/desktop/qt6_6120/qt6_6120",
+      "package": "qt.qt6.6120.clang_64",
+      "directory": "macos",
+      "archives": ["qtbase", "qtdeclarative", "qtsvg", "qttranslations"]
+    },
+    "windows": {
+      "repository": "windows_x86/desktop/qt6_6120/qt6_6120_msvc2022_64",
+      "package": "qt.qt6.6120.win64_msvc2022_64",
+      "directory": "msvc2022_64",
+      "archives": ["qtbase", "qtdeclarative", "qtsvg", "qttranslations"]
+    }
   }
 }

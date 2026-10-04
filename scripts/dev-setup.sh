@@ -3,7 +3,7 @@
 #
 # The same script runs on developer machines, in BayanDocs cloud sessions and in CI, so that everyone builds with identical tool versions (ADR-0017):
 #   - CMake, Ninja, clang-format and clang-tidy from PyPI, pinned exactly and checked against the SHA-256 hashes in deps/requirements-tools.txt (pip --require-hashes, wheels only, so no package code runs at install time);
-#   - Qt at the exact version in deps/qt.json, installed by aqtinstall (itself hash-pinned in deps/requirements-aqtinstall.txt), which checks every Qt archive against the SHA-256 hash published on download.qt.io. Only LGPL modules are installed (ADR-0013).
+#   - Qt at the exact version in deps/qt.json, installed by scripts/install-qt.py (Python standard library only), which checks every Qt archive against the SHA-256 hash published on download.qt.io. Only LGPL modules are installed (ADR-0013).
 # It is idempotent: tools live in directories named after a hash of their pin files, so running it again does nothing unless a pin changed.
 #
 # Usage: scripts/dev-setup.sh [--link-dir DIR] [--no-qt]
@@ -101,19 +101,11 @@ if $want_qt; then
     if qt_matches "$candidate" "$qt_version"; then qt_dir=$candidate; break; fi
   done
   if [ -z "$qt_dir" ]; then
-    archives=$(qt_pin archives)
+    # Does nothing if this Qt is already installed; otherwise downloads it from Qt's servers and checks every archive's SHA-256.
     qt_dir="$tools_dir/Qt/$qt_version/$(qt_pin directory)"
-    if [ "$(cat "$qt_dir/.bayandocs-archives" 2>/dev/null)" != "$archives" ] || ! qt_matches "$qt_dir" "$qt_version"; then
-      aqt_venv=$(install_venv aqtinstall "$root/deps/requirements-aqtinstall.txt")
-      say "installing Qt $qt_version ($archives) into $tools_dir/Qt"
-      mkdir -p "$tools_dir/Qt"
-      # aqtinstall writes aqtinstall.log into the current directory. Archives come from Qt's master server; their hashes always come from download.qt.io.
-      # shellcheck disable=SC2086 # the archive list is meant to be split into words
-      (cd "$tools_dir/Qt" && "$(venv_bin "$aqt_venv")/aqt" install-qt "$(qt_pin aqt_host)" desktop "$qt_version" "$(qt_pin arch)" \
-        --base https://master.qt.io --outputdir "$tools_dir/Qt" --archives $archives)
-      qt_matches "$qt_dir" "$qt_version" || die "Qt $qt_version was not installed where expected ($qt_dir)"
-      echo "$archives" >"$qt_dir/.bayandocs-archives"
-    fi
+    "$python" "$root/scripts/install-qt.py" --prefix "$tools_dir/Qt" --cmake "$tools_bin/cmake" --pins "$root/deps/qt.json" >&2 ||
+      die "installing Qt $qt_version failed"
+    qt_matches "$qt_dir" "$qt_version" || die "Qt $qt_version was not installed where expected ($qt_dir)"
   fi
 fi
 

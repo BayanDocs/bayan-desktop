@@ -26,3 +26,10 @@ foreach(scenario IN ITEMS forbidden-requested forbidden-linked forbidden-found u
       -D "MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/qt-policy/run-scenario.cmake")
 endforeach()
+
+# The Qt installer (scripts/install-qt.py), run against a small fake Qt repository on disk.
+find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+add_test(NAME install_qt COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/install-qt/test_install_qt.py")
+set_tests_properties(install_qt PROPERTIES
+  ENVIRONMENT "BAYAN_INSTALL_QT=${PROJECT_SOURCE_DIR}/scripts/install-qt.py;BAYAN_TEST_CMAKE=${CMAKE_COMMAND}"
+  TIMEOUT 120)
