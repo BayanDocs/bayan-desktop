@@ -29,6 +29,7 @@ target_link_libraries(bayan-desktop PRIVATE bayan_engine Qt6::Gui Qt6::Qml Qt6::
 # On Apple platforms Qt can link its permission plugins (camera, microphone, location and so on) into the app as static libraries. The app
 # needs none of those permissions, and Qt must be linked dynamically (ADR-0013), so they are excluded.
 qt_import_plugins(bayan-desktop EXCLUDE_BY_TYPE permissions)
+bayan_deploy_engine_runtime(bayan-desktop)
 
 set_target_properties(bayan-desktop PROPERTIES
   OUTPUT_NAME bayan-desktop

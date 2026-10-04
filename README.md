@@ -26,7 +26,7 @@ What each operating system needs before running the script:
 - **macOS (Apple silicon):** the Xcode command line tools (`xcode-select --install`) and Python 3.11 or newer.
 - **Windows:** Visual Studio 2022 with the "Desktop development with C++" workload, Git for Windows (run the script in Git Bash) and Python 3.11 or newer. Then open an "x64 Native Tools" developer prompt, put the tools folder and Qt's `bin` folder that the script printed at the front of `PATH`, set `CMAKE_PREFIX_PATH` to the Qt folder, and run `cmake --workflow --preset msvc`.
 
-The sanitizer build (`cmake --workflow --preset asan`, Linux) runs the tests with AddressSanitizer and UndefinedBehaviorSanitizer. `bayan-desktop --smoke-test` starts the app, checks that the engine's page is displayed and exits; CI runs it without a screen (`QT_QPA_PLATFORM=offscreen`).
+The sanitizer build (`cmake --workflow --preset asan`, Linux) runs the tests with AddressSanitizer and UndefinedBehaviorSanitizer. `bayan-desktop --smoke-test` starts the app, checks that the engine's page is displayed and exits; CI runs it without a screen (`QT_QPA_PLATFORM=offscreen`). `scripts/test-engine-sdk.sh` builds the app against the engine as a separate shared library, laid out like bayan-core's C SDK ([src/engine/README.md](src/engine/README.md)), as it will be once that SDK exists.
 
 ## Where things are decided
 

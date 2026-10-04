@@ -2,6 +2,7 @@
 qt_add_executable(tst_engine tst_engine.cpp)
 target_link_libraries(tst_engine PRIVATE bayan_engine Qt6::Test bayan::compile_options)
 qt_import_plugins(tst_engine EXCLUDE_BY_TYPE permissions) # See src/CMakeLists.txt.
+bayan_deploy_engine_runtime(tst_engine)
 add_test(NAME engine.wrapper COMMAND tst_engine)
 
 # Unit tests for the document session (src/app), against the stub engine. The session's source is compiled into the test as well, because the
@@ -11,6 +12,7 @@ qt_add_executable(tst_documentsession tst_documentsession.cpp
 target_include_directories(tst_documentsession PRIVATE "${PROJECT_SOURCE_DIR}/src/app")
 target_link_libraries(tst_documentsession PRIVATE bayan_engine Qt6::Gui Qt6::Qml Qt6::Test bayan::compile_options)
 qt_import_plugins(tst_documentsession EXCLUDE_BY_TYPE permissions) # See src/CMakeLists.txt.
+bayan_deploy_engine_runtime(tst_documentsession)
 add_test(NAME app.document_session COMMAND tst_documentsession)
 
 # Headless smoke test: the application starts with the offscreen platform plugin, shows the stub engine's page, checks its pixels and exits.

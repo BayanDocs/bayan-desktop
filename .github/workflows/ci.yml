@@ -1,7 +1,8 @@
 # Build, lint and test bayan-desktop on Linux, macOS and Windows (DESK-001).
 # Every tool is pinned and verified: actions by full commit SHA, Python and the build tools by exact version and hash (deps/), Qt by exact
 # version through scripts/install-qt.py, which checks each archive against the SHA-256 published on download.qt.io (ADR-0017).
-# scripts/dev-setup.sh does the installing, so CI uses exactly what developers and cloud sessions use.
+# scripts/dev-setup.sh does the installing, so CI uses exactly what developers and cloud sessions use. scripts/test-engine-sdk.sh checks, on every
+# operating system, that the app also builds and passes its engine tests against a shared-library engine laid out like the bayan-core C SDK.
 name: CI
 
 on:
@@ -47,6 +48,8 @@ jobs:
           PYTHON: ${{ steps.python.outputs.python-path }}
       - name: Verification gate (build, clang-format, clang-tidy, qmllint, tests, headless smoke test)
         run: cmake --workflow --preset verify
+      - name: Engine SDK path (stub built as a stand-in SDK; build and engine tests with BAYAN_ENGINE=sdk)
+        run: scripts/test-engine-sdk.sh
 
   sanitizers:
     name: Linux · AddressSanitizer and UndefinedBehaviorSanitizer
@@ -94,6 +97,8 @@ jobs:
           PYTHON: ${{ steps.python.outputs.python-path }}
       - name: Build and test (including the headless smoke test)
         run: cmake --workflow --preset ci
+      - name: Engine SDK path (stub built as a stand-in SDK; build and engine tests with BAYAN_ENGINE=sdk)
+        run: scripts/test-engine-sdk.sh
 
   windows:
     name: Windows (MSVC) · build and test
@@ -129,3 +134,5 @@ jobs:
           }
       - name: Build and test (including the headless smoke test)
         run: cmake --workflow --preset msvc
+      - name: Engine SDK path (stub built as a stand-in SDK; build and engine tests with BAYAN_ENGINE=sdk)
+        run: scripts/test-engine-sdk.sh
