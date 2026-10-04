@@ -19,6 +19,7 @@ The plan, decisions (ADRs), specifications and work packages live in the [BayanD
 
 ## Rules specific to bayan-desktop
 
+- **Licensing (ADR-0003):** GPL-3.0-or-later. Qt stays LGPL-only even though the app is GPL (ADR-0013, amendment of 2026-10-04).
 - **Thin shell (ADR-0013):** no document logic here. If something would have to be implemented twice (desktop and web), it belongs in bayan-core. The shell draws the interface from the shared UI manifest, forwards input, displays engine-rendered tiles and overlays, and fulfils host-service requests.
 - **Stack:** C++20, CMake, Qt 6 Quick (QML) for the interface, C++ only as glue. Track the newest Qt 6 minor release (Qt 6.12 at planning time) per ADR-0013, pinned exactly.
 - **Qt licensing:** only LGPLv3 Qt modules, linked dynamically. Forbidden: Qt Charts, Qt Graphs, Qt GRPC, Qt Quick 3D, Qt Virtual Keyboard, Qt Canvas Painter and any other GPL-only or commercial-only module or tool. Compile QML with `qmlcachegen`, not the commercial `qmlsc`.
