@@ -1,0 +1,26 @@
+# Unit tests for the engine wrapper, run against the stub engine.
+qt_add_executable(tst_engine tst_engine.cpp)
+target_link_libraries(tst_engine PRIVATE bayan_engine Qt6::Test bayan::compile_options)
+add_test(NAME engine.wrapper COMMAND tst_engine)
+
+# Headless smoke test: the application starts with the offscreen platform plugin, shows the stub engine's page, checks its pixels and exits.
+add_test(NAME app.smoke COMMAND bayan-desktop --smoke-test)
+
+# Every test runs without a screen and with Qt's standard settings, whatever the developer's environment says.
+set_tests_properties(engine.wrapper app.smoke PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1"
+  TIMEOUT 120)
+
+# The Qt licensing policy (cmake/BayanQtPolicy.cmake): configuring small fixture projects must fail for forbidden, unreviewed or static Qt
+# modules and for qmlsc, and succeed for a reviewed shared module. The fixtures define stand-in Qt targets, so no GPL module is ever needed.
+foreach(scenario IN ITEMS forbidden-requested forbidden-linked forbidden-found unreviewed-linked static-qt qmlsc allowed)
+  add_test(NAME qt_policy.${scenario}
+    COMMAND "${CMAKE_COMMAND}"
+      -D "SCENARIO=${scenario}"
+      -D "FIXTURE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/qt-policy"
+      -D "WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/qt-policy/${scenario}"
+      -D "POLICY_MODULE=${PROJECT_SOURCE_DIR}/cmake/BayanQtPolicy.cmake"
+      -D "GENERATOR=${CMAKE_GENERATOR}"
+      -D "MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/qt-policy/run-scenario.cmake")
+endforeach()

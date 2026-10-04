@@ -1,0 +1,6 @@
+# C++ formatting for bayan-desktop. Checked in CI with the pinned clang-format (deps/requirements-tools.txt); run `cmake --build --preset dev --target format` to apply.
+BasedOnStyle: LLVM
+ColumnLimit: 140
+InsertBraces: true
+IncludeBlocks: Preserve
+SortIncludes: CaseSensitive
