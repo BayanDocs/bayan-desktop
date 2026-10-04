@@ -1,5 +1,5 @@
 # Configures the Qt licensing policy fixture for one scenario and checks the outcome. Run by CTest (see tests/CMakeLists.txt).
-# Every scenario except "allowed" must fail to configure, with the expected explanation.
+# The scenarios named "allowed..." must configure; every other one must fail, with the expected explanation.
 
 set(expectations
   "forbidden-requested|Qt module 'Charts' is forbidden"
@@ -7,8 +7,11 @@ set(expectations
   "forbidden-found|Qt module 'Quick3D' is forbidden \\(GPL-only or commercial-only\\), but it was found or linked"
   "unreviewed-linked|links the Qt module 'Sql', which has not been reviewed"
   "static-qt|Qt must be linked dynamically"
+  "static-plugin|may link the Qt plugin 'FakePermissionPlugin' statically"
+  "forbidden-plugin|may link the plugin 'FakeSceneParserPlugin' of the forbidden Qt module 'Quick3D'"
   "qmlsc|commercial-only QML compiler qmlsc"
-  "allowed|Qt licensing policy: OK")
+  "allowed|Qt licensing policy: OK"
+  "allowed-excluded-plugin|Qt licensing policy: OK")
 
 set(expected "")
 foreach(entry IN LISTS expectations)
@@ -35,7 +38,7 @@ execute_process(
   ERROR_VARIABLE output)
 
 message("${output}")
-if(SCENARIO STREQUAL "allowed")
+if(SCENARIO MATCHES "^allowed")
   if(NOT result EQUAL 0)
     message(FATAL_ERROR "Configuration failed, but this scenario uses only allowed modules.")
   endif()

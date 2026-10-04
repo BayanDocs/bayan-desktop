@@ -81,6 +81,46 @@ function(_bayan_qt_modules_in items out_var)
   set(${out_var} "${result}" PARENT_SCOPE)
 endfunction()
 
+# If <name> (without the Qt6:: prefix) is a Qt plugin, or the object library that initializes one (<plugin>_init), sets <out_var> to the
+# plugin's name; otherwise to an empty string.
+function(_bayan_qt_plugin_of name out_var)
+  set(${out_var} "" PARENT_SCOPE)
+  set(candidate "${name}")
+  if(name MATCHES "^(.+)_init$")
+    set(candidate "${CMAKE_MATCH_1}")
+  endif()
+  if(TARGET "Qt6::${candidate}")
+    get_target_property(plugin_type "Qt6::${candidate}" QT_PLUGIN_TYPE)
+    if(plugin_type)
+      set(${out_var} "${candidate}" PARENT_SCOPE)
+    endif()
+  endif()
+endfunction()
+
+# Checks one Qt plugin that <target> may link, and appends any problems to the list named <violations_var>.
+# Plugins are judged by the module they belong to. In a shared Qt build, plugins are loaded at run time; the few that Qt ships as static
+# libraries (on Apple platforms, the permission plugins) are linked only under conditions, so a target that could link one must exclude its
+# plugin type with qt_import_plugins(<target> EXCLUDE_BY_TYPE <type>).
+function(_bayan_qt_check_plugin target plugin violations_var)
+  set(violations "${${violations_var}}")
+  get_target_property(owner "Qt6::${plugin}" QT_MODULE)
+  get_target_property(plugin_type "Qt6::${plugin}" QT_PLUGIN_TYPE)
+  get_target_property(type "Qt6::${plugin}" TYPE)
+  _bayan_qt_is_forbidden("${owner}" forbidden)
+  if(forbidden)
+    list(APPEND violations "target '${target}' may link the plugin '${plugin}' of the forbidden Qt module '${owner}' (GPL-only or commercial-only)")
+  elseif(NOT owner IN_LIST BAYAN_QT_ALLOWED_MODULES)
+    list(APPEND violations "target '${target}' may link the plugin '${plugin}' of the Qt module '${owner}', which has not been reviewed")
+  elseif(type STREQUAL "STATIC_LIBRARY")
+    get_target_property(excluded_types_marker "${target}" "QT_PLUGINS_${plugin_type}")
+    get_target_property(included "${target}" QT_PLUGINS)
+    if(NOT excluded_types_marker STREQUAL "-" OR "Qt6::${plugin}" IN_LIST included OR "Qt::${plugin}" IN_LIST included)
+      list(APPEND violations "target '${target}' may link the Qt plugin '${plugin}' statically; Qt must be linked dynamically (LGPL). Exclude it with qt_import_plugins(${target} EXCLUDE_BY_TYPE ${plugin_type}), or decide in an ADR that static linking is acceptable")
+    endif()
+  endif()
+  set(${violations_var} "${violations}" PARENT_SCOPE)
+endfunction()
+
 # Runs at the end of configuration (scheduled below). Checks every directory and target of the project.
 function(bayan_qt_policy_check)
   _bayan_collect_directories("${CMAKE_SOURCE_DIR}" directories)
@@ -97,7 +137,7 @@ function(bayan_qt_policy_check)
       endif()
     endforeach()
 
-    # 2. Our own targets may link only reviewed modules, and only as shared libraries (or header-only interface libraries).
+    # 2. Our own targets may link only reviewed modules, only as shared libraries (or header-only interface libraries), and no static plugins.
     get_property(targets DIRECTORY "${dir}" PROPERTY BUILDSYSTEM_TARGETS)
     foreach(target IN LISTS targets)
       get_target_property(link_items "${target}" LINK_LIBRARIES)
@@ -110,6 +150,11 @@ function(bayan_qt_policy_check)
       endforeach()
       _bayan_qt_modules_in("${items}" modules)
       foreach(module IN LISTS modules)
+        _bayan_qt_plugin_of("${module}" plugin)
+        if(plugin)
+          _bayan_qt_check_plugin("${target}" "${plugin}" violations)
+          continue()
+        endif()
         _bayan_qt_is_forbidden("${module}" forbidden)
         if(forbidden)
           list(APPEND violations "target '${target}' links the forbidden Qt module '${module}' (GPL-only or commercial-only)")
