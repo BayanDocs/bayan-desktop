@@ -7,7 +7,7 @@
 # It is idempotent: tools live in directories named after a hash of their pin files, so running it again does nothing unless a pin changed.
 #
 # Usage: scripts/dev-setup.sh [--link-dir DIR] [--no-qt]
-#   --link-dir DIR  also link the tools into DIR (for example /usr/local/bin in a cloud environment's setup script)
+#   --link-dir DIR  also link the tools into DIR, a directory you put on PATH yourself (avoid /usr/local/bin on shared machines: CMake 4 refuses projects that declare cmake_minimum_required below 3.5)
 #   --no-qt         do not install Qt (for example when you installed Qt 6.12.0 yourself; point CMAKE_PREFIX_PATH at it)
 # Environment: BAYAN_TOOLS_DIR (where to install; default ~/.local/share/bayandocs/desktop-tools), BAYAN_QT_DIR (an existing Qt installation to use if it has the pinned version), PYTHON (Python 3.11 or newer).
 set -euo pipefail
@@ -24,7 +24,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --link-dir) [ $# -ge 2 ] || die "--link-dir needs a directory"; link_dir=$2; shift 2 ;;
     --no-qt) want_qt=false; shift ;;
-    -h|--help) sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
   esac
 done
