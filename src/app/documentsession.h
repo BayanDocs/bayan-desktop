@@ -44,7 +44,11 @@ public:
   // Device-independent pixels are 1/96 inch, and 1 inch is 1,828,800 BLU.
   static constexpr qint64 kBluPerDip = 19'050;
 
+  // The engine must outlive the session.
   explicit DocumentSession(Engine &engine, QObject *parent = nullptr);
+  // Releases the placeholder blob if the session still holds it.
+  ~DocumentSession() override;
+  Q_DISABLE_COPY_MOVE(DocumentSession)
 
   // Starts the conversation: hello, then doc.open, then view.set.
   void start();
@@ -71,6 +75,7 @@ private:
   void onEvent(const QString &type, const QJsonObject &payload);
   void setPages(const QJsonObject &payload);
   void fail();
+  void releaseDocumentBlob();
 
   Engine &engine_;
   Status status_ = Status::Starting;
@@ -78,6 +83,7 @@ private:
   qint64 documentId_ = 0;
   std::vector<Page> pages_;
   int revision_ = 0;
+  // The placeholder document's bytes, held by the engine from doc.open until the engine has answered it.
   BlobId documentBlob_ = 0;
   qint64 helloRequest_ = 0;
   qint64 openRequest_ = 0;

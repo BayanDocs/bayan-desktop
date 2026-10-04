@@ -28,6 +28,8 @@ DocumentSession::DocumentSession(Engine &engine, QObject *parent) : QObject(pare
   connect(&engine_, &Engine::protocolError, this, &DocumentSession::fail);
 }
 
+DocumentSession::~DocumentSession() { releaseDocumentBlob(); }
+
 void DocumentSession::start() {
   const QJsonObject shell{
       {u"name"_s, u"bayan-desktop"_s}, {u"version"_s, QCoreApplication::applicationVersion()}, {u"platform"_s, QSysInfo::productType()}};
@@ -59,11 +61,11 @@ std::optional<DocumentSession::Page> DocumentSession::page(int index) const {
 }
 
 void DocumentSession::onReply(qint64 requestId, bool ok, const QJsonObject &payload, const QJsonObject & /*error*/) {
-  if (requestId != helloRequest_ && requestId != openRequest_ && requestId != viewRequest_) {
+  if (status_ == Status::Failed || (requestId != helloRequest_ && requestId != openRequest_ && requestId != viewRequest_)) {
     return;
   }
   if (!ok) {
-    fail();
+    fail(); // also releases the placeholder blob if doc.open was refused
     return;
   }
   if (requestId == helloRequest_) {
@@ -77,8 +79,7 @@ void DocumentSession::onReply(qint64 requestId, bool ok, const QJsonObject &payl
       fail();
     }
   } else if (requestId == openRequest_) {
-    engine_.releaseBlob(documentBlob_);
-    documentBlob_ = 0;
+    releaseDocumentBlob();
     documentId_ = payload.value(u"doc_id"_s).toInteger(0);
     if (documentId_ <= 0) {
       fail();
@@ -137,9 +138,17 @@ void DocumentSession::setPages(const QJsonObject &payload) {
 }
 
 void DocumentSession::fail() {
+  releaseDocumentBlob();
   if (status_ != Status::Failed) {
     status_ = Status::Failed;
     emit statusChanged();
+  }
+}
+
+void DocumentSession::releaseDocumentBlob() {
+  if (documentBlob_ != 0) {
+    engine_.releaseBlob(documentBlob_);
+    documentBlob_ = 0;
   }
 }
 

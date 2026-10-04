@@ -42,6 +42,6 @@ file(GLOB_RECURSE lint_sources CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/src/*.cp
 file(GLOB_RECURSE lint_headers CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/src/*.h" "${PROJECT_SOURCE_DIR}/tests/*.h")
 set(lint_build_targets bayan-desktop)
 if(BAYAN_BUILD_TESTS)
-  list(APPEND lint_build_targets tst_engine)
+  list(APPEND lint_build_targets tst_engine tst_documentsession)
 endif()
 bayan_add_lint_targets(SOURCES ${lint_sources} HEADERS ${lint_headers} BUILD_TARGETS ${lint_build_targets})

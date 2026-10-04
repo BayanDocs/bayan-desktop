@@ -2,6 +2,9 @@
 // real engine from bayan-core (CORE-007) exists. It follows the same rules as the real engine: messages are processed in order on the
 // engine's own thread, the message callback runs on that thread, and no exception ever crosses the C interface.
 //
+// For tests of the shell's error paths, the configuration JSON may contain {"test": {"doc_open": "fail"}} (doc.open is refused) or
+// {"test": {"doc_open": "ignore"}} (doc.open is never answered). Anything else in "test" makes bayan_engine_new fail.
+//
 // It understands only what the shell scaffold needs: the hello/welcome handshake, doc.open (always opens the test page), view.set and
 // doc.close. Everything else is answered with an "unsupported_message" error.
 
@@ -138,6 +141,9 @@ QJsonObject errorObject(const QString &code, const QString &messageId, const QJs
 } // namespace
 
 // The engine instance behind the opaque pointer of the C interface.
+// How the stub answers doc.open; anything but Normal is only for tests (see the top of this file).
+enum class DocOpenMode : std::uint8_t { Normal, Fail, Ignore };
+
 struct BayanEngine {
   // Shared between the shell's threads and the engine thread; guarded by mutex.
   std::mutex mutex;
@@ -158,6 +164,7 @@ struct BayanEngine {
 
   // Used only on the engine thread.
   bool handshakeDone = false;
+  DocOpenMode docOpenMode = DocOpenMode::Normal; // set before the engine thread starts
   qint64 nextSequence = 1;
 
   std::thread thread;
@@ -278,6 +285,13 @@ void BayanEngine::handleMessage(qint64 id, const QString &type, const QJsonObjec
     return;
   }
   if (type == u"doc.open"_s) {
+    if (docOpenMode == DocOpenMode::Ignore) {
+      return;
+    }
+    if (docOpenMode == DocOpenMode::Fail) {
+      fail(id, errorObject(u"open_failed"_s, u"engine-error-open-failed"_s));
+      return;
+    }
     // The stub opens its test page whatever the blob contains, but the blob must exist.
     const auto blob = static_cast<BayanBlobId>(payload.value(u"blob"_s).toInteger(0));
     if (blob == 0 || !blobExists(blob)) {
@@ -329,15 +343,24 @@ const char *bayan_version(void) { return kStubVersion; }
 
 BayanEngine *bayan_engine_new(const uint8_t *config_json, size_t config_len) {
   try {
+    auto engine = std::make_unique<BayanEngine>();
     if (config_len != 0) {
       QJsonObject config;
       const auto bytes = messageBytes(config_json, config_len);
       if (!bytes || !parseObject(*bytes, config)) {
         return nullptr;
       }
-      // The stub needs no configuration; the real engine reads its settings here.
+      // The real engine reads its settings here; the stub only knows the test switches described at the top of this file.
+      const QJsonObject test = config.value(u"test"_s).toObject();
+      const QString docOpen = test.value(u"doc_open"_s).toString(u"normal"_s);
+      if (docOpen == u"fail"_s) {
+        engine->docOpenMode = DocOpenMode::Fail;
+      } else if (docOpen == u"ignore"_s) {
+        engine->docOpenMode = DocOpenMode::Ignore;
+      } else if (docOpen != u"normal"_s || test.size() > (test.contains(u"doc_open"_s) ? 1 : 0)) {
+        return nullptr;
+      }
     }
-    auto engine = std::make_unique<BayanEngine>();
     engine->thread = std::thread([raw = engine.get()] { raw->run(); });
     return engine.release();
   } catch (...) {

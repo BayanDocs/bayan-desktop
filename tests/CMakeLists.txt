@@ -4,11 +4,20 @@ target_link_libraries(tst_engine PRIVATE bayan_engine Qt6::Test bayan::compile_o
 qt_import_plugins(tst_engine EXCLUDE_BY_TYPE permissions) # See src/CMakeLists.txt.
 add_test(NAME engine.wrapper COMMAND tst_engine)
 
+# Unit tests for the document session (src/app), against the stub engine. The session's source is compiled into the test as well, because the
+# application's QML module owns it.
+qt_add_executable(tst_documentsession tst_documentsession.cpp
+  "${PROJECT_SOURCE_DIR}/src/app/documentsession.cpp" "${PROJECT_SOURCE_DIR}/src/app/documentsession.h")
+target_include_directories(tst_documentsession PRIVATE "${PROJECT_SOURCE_DIR}/src/app")
+target_link_libraries(tst_documentsession PRIVATE bayan_engine Qt6::Gui Qt6::Qml Qt6::Test bayan::compile_options)
+qt_import_plugins(tst_documentsession EXCLUDE_BY_TYPE permissions) # See src/CMakeLists.txt.
+add_test(NAME app.document_session COMMAND tst_documentsession)
+
 # Headless smoke test: the application starts with the offscreen platform plugin, shows the stub engine's page, checks its pixels and exits.
 add_test(NAME app.smoke COMMAND bayan-desktop --smoke-test)
 
 # Every test runs without a screen and with Qt's standard settings, whatever the developer's environment says.
-set_tests_properties(engine.wrapper app.smoke PROPERTIES
+set_tests_properties(engine.wrapper app.document_session app.smoke PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1"
   TIMEOUT 120)
 
