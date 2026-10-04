@@ -29,9 +29,10 @@ if(MSVC)
     /sdl /guard:cf
     $<$<BOOL:${BAYAN_WARNINGS_AS_ERRORS}>:/WX>
   )
+  # The linker does not get /WX: with Ninja, CMake embeds manifests itself and passes /MANIFEST:NO together with /MANIFESTUAC:NO, which
+  # always makes the linker warn (LNK4075).
   target_link_options(bayan_compile_options INTERFACE
     /guard:cf /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /CETCOMPAT
-    $<$<BOOL:${BAYAN_WARNINGS_AS_ERRORS}>:/WX>
   )
   if(BAYAN_SANITIZERS)
     message(FATAL_ERROR "BAYAN_SANITIZERS is supported with GCC and Clang only")
