@@ -6,7 +6,27 @@ This repository is a deliberately **thin shell**: windows, menus, the ribbon and
 
 Built with C++20 and Qt 6 (Qt Quick), using only LGPL-licensed Qt modules.
 
-> **Status: Phase 0 (Foundations).** No code yet. The first work package is [DESK-001](https://github.com/BayanDocs/docs/blob/HEAD/workpackages/phase-0/DESK-001-desktop-scaffold.md).
+> **Status: Phase 0 (Foundations).** The scaffold from [DESK-001](https://github.com/BayanDocs/docs/blob/HEAD/workpackages/phase-0/DESK-001-desktop-scaffold.md) is in place: a Qt Quick window with a placeholder ribbon and a document area that shows a page rendered by a stub engine, the engine integration layer, tests and CI. The real engine arrives with bayan-core's C SDK (CORE-007) and the document canvas with DESK-002.
+
+## Building
+
+Everything is built with CMake presets. One script installs the exact tool versions the project pins (CMake, Ninja, clang-format, clang-tidy and Qt 6.12.0, each checked against a published hash), so that your build matches CI:
+
+```sh
+scripts/dev-setup.sh                               # once; installs into ~/.local/share/bayandocs/desktop-tools
+. ~/.local/share/bayandocs/desktop-tools/env.sh    # in every new shell
+cmake --workflow --preset dev                      # Debug build and tests
+cmake --workflow --preset verify                   # the full verification gate (adds lint), as in CI
+./build/dev/src/bayan-desktop                      # run the app (on macOS: open build/dev/src/bayan-desktop.app)
+```
+
+What each operating system needs before running the script:
+
+- **Linux (Ubuntu 24.04 or similar):** a C++20 compiler (GCC 13 or Clang 18), Python 3.11 or newer with `venv`, and the development packages Qt needs: `sudo apt install build-essential python3-venv libgl-dev libegl-dev libvulkan-dev libxkbcommon-dev libfontconfig-dev libdbus-1-dev`.
+- **macOS (Apple silicon):** the Xcode command line tools (`xcode-select --install`) and Python 3.11 or newer.
+- **Windows:** Visual Studio 2022 with the "Desktop development with C++" workload, Git for Windows (run the script in Git Bash) and Python 3.11 or newer. Then open an "x64 Native Tools" developer prompt, put the tools folder and Qt's `bin` folder that the script printed at the front of `PATH`, set `CMAKE_PREFIX_PATH` to the Qt folder, and run `cmake --workflow --preset msvc`. Note: the pinned aqtinstall 3.3.0 cannot yet install Qt 6.12 for Windows, because Qt changed its download layout; until that is resolved, install Qt 6.12.0 for MSVC 2022 64-bit with Qt's own installer (LGPL modules only) and set `BAYAN_QT_DIR` to that folder before running the script, which then uses it instead of installing Qt.
+
+The sanitizer build (`cmake --workflow --preset asan`, Linux) runs the tests with AddressSanitizer and UndefinedBehaviorSanitizer. `bayan-desktop --smoke-test` starts the app, checks that the engine's page is displayed and exits; CI runs it without a screen (`QT_QPA_PLATFORM=offscreen`).
 
 ## Where things are decided
 

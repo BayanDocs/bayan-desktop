@@ -30,10 +30,21 @@ The plan, decisions (ADRs), specifications and work packages live in the [BayanD
 
 ## Verification gate
 
-Defined by DESK-001 (a CMake workflow preset or script); until DESK-001 has landed there is no code and no gate.
+Install the pinned tools once per machine or session with `scripts/dev-setup.sh` (CMake, Ninja, clang-format and clang-tidy from `deps/requirements-tools.txt`, and Qt from `deps/qt.json` unless a matching Qt is already installed), then load the environment it prints (`. ~/.local/share/bayandocs/desktop-tools/env.sh`). The gate is one command, run from the repository root before every push:
+
+```sh
+cmake --workflow --preset verify
+```
+
+It configures an optimized build with warnings as errors and the Qt licensing check, builds, runs clang-format, clang-tidy and qmllint, and runs every test: the engine wrapper unit tests, the headless smoke test (`bayan-desktop --smoke-test` with the offscreen platform plugin) and the Qt licensing policy tests. CI also runs `cmake --workflow --preset asan` (AddressSanitizer and UndefinedBehaviorSanitizer, Linux), `cmake --workflow --preset ci` on macOS and `cmake --workflow --preset msvc` on Windows (from an x64 Visual Studio developer environment). `cmake --workflow --preset dev` is the quick Debug build and test, and `cmake --build --preset verify --target format` fixes formatting.
+
+Notes for agents: the engine is the stub in `src/engine/stub/` until the bayan-core C SDK from CORE-007 exists (`-DBAYAN_ENGINE=sdk -DBAYAN_ENGINE_SDK_DIR=<path>`); `src/engine/stub/include/bayan_ffi.h` is a provisional copy of the engine's C interface that the SDK's generated header replaces. Use `bayan_find_qt()` instead of `find_package(Qt6 ...)`; a new Qt module must be reviewed and added to the allowlist in `cmake/BayanQtPolicy.cmake`.
 
 ## Dependency mechanisms
 
-Qt is installed in CI with aqtinstall at pinned versions with checksum verification; the Qt version and release date are recorded in a pin file checked by CI (X-003). Upgrades happen only in the monthly dependency session.
+- **Qt:** the exact version, its release date, the aqtinstall version and the archives to install per platform are recorded in `deps/qt.json`. `scripts/dev-setup.sh` installs them with aqtinstall, which verifies every archive against the SHA-256 hash published on download.qt.io. A CI check that the release date is at least 24 hours before the commit is added by X-003.
+- **Build and lint tools** (CMake, Ninja, clang-format, clang-tidy) and **aqtinstall** are Python packages pinned to exact versions with SHA-256 hashes in `deps/requirements-tools.txt` and `deps/requirements-aqtinstall.txt`; `scripts/dev-setup.sh` installs them with `pip --require-hashes --only-binary :all:`, so only verified prebuilt wheels are used and no package code runs at install time. Each file's header records publish dates and the command that regenerates it.
+- **CI:** GitHub Actions are pinned to full commit SHAs with the version in a comment, the Python version is pinned in the workflow, and Ubuntu packages come from the Ubuntu archive frozen at a snapshot date (`UBUNTU_SNAPSHOT` in `.github/workflows/ci.yml`).
+- Upgrades happen only in the monthly dependency session.
 
-In BayanDocs cloud sessions the tools are preinstalled at pinned versions by `docs/scripts/cloud-environment-setup.sh`; run `bayandocs-tools` to list them. If a tool is missing, install the version pinned there (never a newer one) and mention it in the pull request.
+In BayanDocs cloud sessions the tools are preinstalled at pinned versions by `docs/scripts/cloud-environment-setup.sh`; run `bayandocs-tools` to list them. That script installs Qt but not this repository's pinned CMake, clang-format and clang-tidy, so run `scripts/dev-setup.sh` at the start of a session (it reuses the preinstalled Qt) unless the environment's setup script already does. If any other tool is missing, install the version pinned there (never a newer one) and mention it in the pull request.
