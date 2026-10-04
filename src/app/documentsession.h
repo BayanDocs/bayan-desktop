@@ -12,7 +12,6 @@
 #include <QtCore/QString>
 #include <QtQml/qqmlregistration.h>
 
-#include <cstdint>
 #include <optional>
 #include <vector>
 
@@ -20,7 +19,8 @@ namespace bayan {
 
 class DocumentSession final : public QObject {
   Q_OBJECT
-  QML_ELEMENT
+  // An explicit name: with automatic naming, qmltyperegistrar would check the namespace-qualified bayan::DocumentSession.
+  QML_NAMED_ELEMENT(DocumentSession)
   QML_UNCREATABLE("DocumentSession is created by the application.")
   // QML refers to the status values as DocumentSession.Status.Ready and so on.
   Q_CLASSINFO("RegisterEnumClassesUnscoped", "false")
@@ -31,7 +31,8 @@ class DocumentSession final : public QObject {
   Q_PROPERTY(int revision READ revision NOTIFY revisionChanged FINAL)
 
 public:
-  enum class Status : std::uint8_t { Starting, Ready, Failed };
+  // quint8 rather than std::uint8_t: Qt's QML tooling knows Qt's integer types.
+  enum class Status : quint8 { Starting, Ready, Failed };
   Q_ENUM(Status)
 
   // A page's size in BLU (ADR-0005).
