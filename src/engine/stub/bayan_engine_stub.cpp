@@ -138,12 +138,12 @@ QJsonObject errorObject(const QString &code, const QString &messageId, const QJs
   return QJsonObject{{u"code"_s, code}, {u"message_id"_s, messageId}, {u"args"_s, args}};
 }
 
-} // namespace
-
-// The engine instance behind the opaque pointer of the C interface.
 // How the stub answers doc.open; anything but Normal is only for tests (see the top of this file).
 enum class DocOpenMode : std::uint8_t { Normal, Fail, Ignore };
 
+} // namespace
+
+// The engine instance behind the opaque pointer of the C interface.
 struct BayanEngine {
   // Shared between the shell's threads and the engine thread; guarded by mutex.
   std::mutex mutex;
