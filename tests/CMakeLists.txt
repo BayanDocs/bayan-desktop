@@ -44,3 +44,13 @@ add_test(NAME install_qt COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DI
 set_tests_properties(install_qt PROPERTIES
   ENVIRONMENT "BAYAN_INSTALL_QT=${PROJECT_SOURCE_DIR}/scripts/install-qt.py;BAYAN_TEST_CMAKE=${CMAKE_COMMAND}"
   TIMEOUT 120)
+
+# The Qt release-age check (scripts/check-qt-release-age.py, ADR-0017 rule 4): its tests, against small Git repositories made on the fly, and
+# the check itself on this repository: the Qt release pinned in deps/qt.json must be at least 24 hours older than the commit that pinned it.
+# The check reads the Git history, so a shallow clone fails it (CI checks out with fetch-depth: 0); a source tree without Git skips it.
+add_test(NAME supply_chain.qt_release_age_tests COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/qt-release-age/test_check_qt_release_age.py")
+set_tests_properties(supply_chain.qt_release_age_tests PROPERTIES
+  ENVIRONMENT "BAYAN_CHECK_QT_RELEASE_AGE=${PROJECT_SOURCE_DIR}/scripts/check-qt-release-age.py"
+  TIMEOUT 120)
+add_test(NAME supply_chain.qt_release_age COMMAND Python3::Interpreter "${PROJECT_SOURCE_DIR}/scripts/check-qt-release-age.py" --root "${PROJECT_SOURCE_DIR}")
+set_tests_properties(supply_chain.qt_release_age PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
