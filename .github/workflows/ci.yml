@@ -44,6 +44,10 @@ jobs:
           sudo apt-get update --snapshot "$UBUNTU_SNAPSHOT"
           # shellcheck disable=SC2086 # the package list is meant to be split into words
           sudo apt-get install -y --no-install-recommends --snapshot "$UBUNTU_SNAPSHOT" $UBUNTU_PACKAGES
+      - name: The pinned Qt release is at least 24 hours old (ADR-0017 rule 4), checked before Qt is installed and its tools run in the build
+        run: '"$PYTHON" scripts/check-qt-release-age.py'
+        env:
+          PYTHON: ${{ steps.python.outputs.python-path }}
       - name: Install pinned tools and Qt
         run: scripts/dev-setup.sh
         env:
@@ -74,6 +78,10 @@ jobs:
           sudo apt-get update --snapshot "$UBUNTU_SNAPSHOT"
           # shellcheck disable=SC2086 # the package list is meant to be split into words
           sudo apt-get install -y --no-install-recommends --snapshot "$UBUNTU_SNAPSHOT" $UBUNTU_PACKAGES
+      - name: The pinned Qt release is at least 24 hours old (ADR-0017 rule 4), checked before Qt is installed and its tools run in the build
+        run: '"$PYTHON" scripts/check-qt-release-age.py'
+        env:
+          PYTHON: ${{ steps.python.outputs.python-path }}
       - name: Install pinned tools and Qt
         run: scripts/dev-setup.sh
         env:
@@ -97,6 +105,10 @@ jobs:
         id: python
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+      - name: The pinned Qt release is at least 24 hours old (ADR-0017 rule 4), checked before Qt is installed and its tools run in the build
+        run: '"$PYTHON" scripts/check-qt-release-age.py'
+        env:
+          PYTHON: ${{ steps.python.outputs.python-path }}
       - name: Install pinned tools and Qt
         run: scripts/dev-setup.sh
         env:
@@ -125,6 +137,10 @@ jobs:
         id: python
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+      - name: The pinned Qt release is at least 24 hours old (ADR-0017 rule 4), checked before Qt is installed and its tools run in the build
+        run: '"$PYTHON" scripts/check-qt-release-age.py'
+        env:
+          PYTHON: ${{ steps.python.outputs.python-path }}
       - name: Install pinned tools and Qt
         run: scripts/dev-setup.sh
         env:
