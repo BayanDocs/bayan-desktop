@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -100,6 +101,17 @@ def file_at(root: Path, commit: str, path: str) -> str | None:
     return git(root, "cat-file", "blob", f"{commit}:{path}")
 
 
+def log_entries(output: str) -> list[tuple[str, int, int]]:
+    """The commits, author times and committer times in the output of `git log --format=%H %at %ct`, which must hold nothing else."""
+    entries = []
+    for line in output.splitlines():
+        match = re.fullmatch(r"([0-9a-f]{40}|[0-9a-f]{64}) ([0-9]+) ([0-9]+)", line)
+        if match is None:
+            raise CheckError(f"cannot read this line of git log's output: {line!r}")
+        entries.append((match[1], int(match[2]), int(match[3])))
+    return entries
+
+
 def pinning_commit(root: Path, pins: Path, version: str) -> Commit | None:
     """The commit that pinned `version`, as described in the module documentation, or None if HEAD does not pin it yet."""
     if git(root, "rev-parse", "--is-shallow-repository").strip() == "true":
@@ -110,12 +122,13 @@ def pinning_commit(root: Path, pins: Path, version: str) -> Commit | None:
     except ValueError as error:
         raise CheckError(f"{pins} is not inside the repository {top}") from error
     found: Commit | None = None
-    for line in git(root, "log", "--topo-order", "--format=%H %at %ct", "--", path).splitlines():
-        commit, author, committer = line.split()
+    # --no-show-signature keeps a log.showSignature setting from adding the signature check's output (the commits on main are signed by GitHub).
+    log = git(root, "log", "--no-show-signature", "--topo-order", "--format=%H %at %ct", "--", path)
+    for commit, author, committer in log_entries(log):
         text = file_at(root, commit, path)
         if text is None or read_pin(text, f"{path} at {commit[:12]}").version != version:
             break
-        found = Commit(commit, datetime.datetime.fromtimestamp(min(int(author), int(committer)), datetime.timezone.utc))
+        found = Commit(commit, datetime.datetime.fromtimestamp(min(author, committer), datetime.timezone.utc))
     if found is None:
         return None
     head = file_at(root, "HEAD", path)

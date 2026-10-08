@@ -18,6 +18,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(os.environ.get("BAYAN_CHECK_QT_RELEASE_AGE", Path(__file__).resolve().parents[2] / "scripts" / "check-qt-release-age.py"))
 
@@ -76,6 +77,21 @@ class Repository:
         self.git("add", "--all")
         self.git("commit", "--quiet", "--allow-empty", "--message", message, when=when)
         return self.git("rev-parse", "HEAD").strip()
+
+    def sign_head(self) -> None:
+        """Give HEAD a signature header, as the commits GitHub signs have, keeping its times. The signature itself is not valid."""
+        header, _, message = self.git("cat-file", "commit", "HEAD").partition("\n\n")
+        signature = "gpgsig -----BEGIN PGP SIGNATURE-----\n \n c2lnbmF0dXJl\n -----END PGP SIGNATURE-----"
+        # Bytes, not text: text mode would turn each \n into \r\n on Windows, which changes the commit.
+        result = subprocess.run(
+            ["git", "-C", str(self.root), "hash-object", "-t", "commit", "-w", "--stdin"],
+            input=f"{header}\n{signature}\n\n{message}".encode("utf-8"),
+            capture_output=True,
+            env=self.environment,
+        )
+        if result.returncode != 0:
+            raise AssertionError(f"git hash-object failed: {result.stderr.decode('utf-8', 'replace')}")
+        self.git("update-ref", "HEAD", result.stdout.decode("ascii").strip())
 
     def check(self, now: datetime.datetime) -> tuple[bool, str]:
         return check_qt_release_age.check(self.root, self.root / "deps" / "qt.json", now)
@@ -174,6 +190,39 @@ class QtReleaseAgeTests(unittest.TestCase):
         subprocess.run(["git", "clone", "--quiet", "--depth", "1", self.repository.root.as_uri(), str(clone)], check=True, capture_output=True, env=self.repository.environment)
         with self.assertRaisesRegex(check_qt_release_age.CheckError, "shallow"):
             check_qt_release_age.check(clone, clone / "deps" / "qt.json", at("2026-10-07T03:00:00"))
+
+    def test_reads_the_log_when_git_is_set_to_show_signatures(self) -> None:
+        # Git's log.showSignature setting makes `git log` print the output of the signature check before each signed commit, and the commits
+        # on main are signed by GitHub. Git runs gpg.program for a commit with a signature header and prints what that program writes to its
+        # error output, so any program that fails with a message stands in for gpg: Python, which runs this test, is always there.
+        self.repository.pin("6.12.0", "2026-09-30")
+        self.repository.commit("pin Qt 6.12.0", at("2026-10-04T22:18:00"))
+        self.repository.sign_head()
+        signed = self.repository.git("rev-parse", "HEAD").strip()
+        self.repository.git("config", "log.showSignature", "true")
+        self.repository.git("config", "gpg.program", sys.executable)
+        self.assertGreater(len(self.repository.git("log", "--format=%H").splitlines()), 1, "the setting should add lines to git log's output")
+        ok, message = self.repository.check(at("2026-10-07T03:00:00"))
+        self.assertTrue(ok, message)
+        self.assertIn(f"commit {signed[:12]}", message)
+        self.assertIn("3 d 22 h before it was pinned", message)
+
+    def test_reports_a_log_it_cannot_read_as_an_error(self) -> None:
+        self.repository.pin("6.12.0", "2026-09-30")
+        self.repository.commit("pin Qt 6.12.0", at("2026-10-04T22:18:00"))
+        real = check_qt_release_age.git
+
+        def git(root: Path, *arguments: str) -> str:
+            output = real(root, *arguments)
+            return f"gpg: Signature made Sun Oct  4 22:18:00 2026 UTC\n{output}" if arguments[0] == "log" else output
+
+        with mock.patch.object(check_qt_release_age, "git", git), contextlib.redirect_stderr(io.StringIO()) as errors:
+            status = check_qt_release_age.main(["--root", str(self.repository.root)])
+        self.assertEqual(status, 2)
+        self.assertIn("cannot read this line of git log's output: 'gpg: Signature made", errors.getvalue())
+        for output in ["No signature", "0123abc 1 2", f"{'a' * 40} 1", f"{'a' * 40} 1 2 3", f"{'A' * 40} 1 2"]:
+            with self.subTest(output=output), self.assertRaises(check_qt_release_age.CheckError):
+                check_qt_release_age.log_entries(output)
 
     def test_rejects_unreadable_pins(self) -> None:
         for text in ['{"qt": "6.12.0"}', '{"qt": "6.12.0", "qt_released": "30.09.2026"}', '{"qt": "6.12.0", "qt_released": "20260930"}', "not json"]:
