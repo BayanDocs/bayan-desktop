@@ -1,0 +1,123 @@
+# Scans this repository with CodeQL, GitHub's static analysis, on every pull request, on pushes to main and weekly, and uploads the results to GitHub code scanning (work package X-002). Alerts appear under Security → Code scanning, and a pull request shows the ones it would add.
+# Languages: GitHub Actions (the workflows), Python (scripts/, tests/ and the checks in .github/) and C++ (the app and its tests). The QML files are not scanned: CodeQL has no QML support.
+# C++ is analyzed while it is compiled, so the C++ job builds the app with the same steps as ci.yml's Linux job: the Ubuntu packages from the frozen snapshot, the Qt release-age check before anything of Qt runs, scripts/dev-setup.sh for the hash-pinned CMake, Ninja and Qt, and the `ci` preset (the build only; the tests run in ci.yml). It uses the runner's own Python 3 (3.11 or newer is enough for scripts/dev-setup.sh), so nothing is downloaded that is not checked against a hash.
+# CodeQL's engine, the CodeQL bundle, is downloaded by this workflow and checked against the SHA-256 that its release publishes, then handed to the CodeQL action, which would otherwise download it without checking a hash. Keep CODEQL_VERSION equal to the bundle that the pinned github/codeql-action names in its src/defaults.json (version 4.38.3 names 2.27.2), and update both together in the monthly dependency session, in all five BayanDocs repositories.
+# Workflow conventions (AGENTS.md): GitHub's own actions only, pinned to full commit SHAs with the version in a comment; per-job permissions; no credentials kept after checkout; timeouts; the pull_request trigger (never pull_request_target).
+name: CodeQL
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 6 * * 2"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  # Only a newer push to the same pull request cancels a run; the weekly run never cancels a run for a push to main, or the other way round.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The CodeQL bundle 2.27.2 (codeql-bundle-v2.27.2, published 2026-10-06). The SHA-256 is the one in the release's codeql-bundle-linux64.tar.zst.checksum.txt.
+  CODEQL_VERSION: 2.27.2
+  CODEQL_BUNDLE_SHA256: f24406b1557c506133db1f972758ee64f14eb3587a53367a1bd737f24495ea97
+  # Ubuntu packages Qt needs to build, from the Ubuntu archive frozen at a date: the same as in ci.yml (keep them equal).
+  UBUNTU_SNAPSHOT: 20261003T000000Z
+  UBUNTU_PACKAGES: libgl-dev libegl-dev libvulkan-dev libxkbcommon-dev libfontconfig-dev libdbus-1-dev
+
+jobs:
+  analyze:
+    name: CodeQL (${{ matrix.language }})
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, python]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read # check out the repository
+      security-events: write # upload the results to code scanning
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the CodeQL bundle (pinned version, SHA-256 checked)
+        run: |
+          bundle="$RUNNER_TEMP/codeql-bundle-linux64.tar.zst"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3 --output "$bundle" \
+            "https://github.com/github/codeql-action/releases/download/codeql-bundle-v$CODEQL_VERSION/codeql-bundle-linux64.tar.zst"
+          echo "$CODEQL_BUNDLE_SHA256  $bundle" | sha256sum --check --strict
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          tools: ${{ runner.temp }}/codeql-bundle-linux64.tar.zst
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          category: /language:${{ matrix.language }}
+
+  cpp:
+    name: CodeQL (c-cpp)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read # check out the repository
+      security-events: write # upload the results to code scanning
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The full history: the Qt release-age check finds the commit that pinned the Qt version in deps/qt.json.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Ubuntu packages
+        run: |
+          sudo apt-get update --snapshot "$UBUNTU_SNAPSHOT"
+          # shellcheck disable=SC2086 # the package list is meant to be split into words
+          sudo apt-get install -y --no-install-recommends --snapshot "$UBUNTU_SNAPSHOT" $UBUNTU_PACKAGES
+
+      - name: The pinned Qt release is at least 24 hours old (ADR-0017 rule 4), checked before Qt is installed and its tools run in the build
+        run: python3 scripts/check-qt-release-age.py
+
+      - name: Install pinned tools and Qt
+        run: scripts/dev-setup.sh
+
+      - name: Download the CodeQL bundle (pinned version, SHA-256 checked)
+        run: |
+          bundle="$RUNNER_TEMP/codeql-bundle-linux64.tar.zst"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3 --output "$bundle" \
+            "https://github.com/github/codeql-action/releases/download/codeql-bundle-v$CODEQL_VERSION/codeql-bundle-linux64.tar.zst"
+          echo "$CODEQL_BUNDLE_SHA256  $bundle" | sha256sum --check --strict
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          languages: c-cpp
+          build-mode: manual
+          tools: ${{ runner.temp }}/codeql-bundle-linux64.tar.zst
+
+      - name: Build (the ci preset, as in ci.yml, without the tests)
+        run: |
+          cmake --preset ci
+          cmake --build --preset ci
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          category: /language:c-cpp
