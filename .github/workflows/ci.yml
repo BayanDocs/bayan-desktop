@@ -1,6 +1,8 @@
 # Build, lint and test bayan-desktop on Linux, macOS and Windows (DESK-001).
-# Every tool is pinned and verified: actions by full commit SHA, Python and the build tools by exact version and hash (deps/), Qt by exact
+# Every tool is pinned and verified: actions by full commit SHA, the build tools by exact version and hash (deps/), Qt by exact
 # version through scripts/install-qt.py, which checks each archive against the SHA-256 published on download.qt.io (ADR-0017).
+# Python is the runner image's own Python 3, as in every other BayanDocs workflow, so nothing is downloaded for it; each job checks that it is
+# 3.11 or newer, which scripts/dev-setup.sh and the tests need, and prints its version.
 # scripts/dev-setup.sh does the installing, so CI uses exactly what developers and cloud sessions use. scripts/test-engine-sdk.sh checks, on every
 # operating system, that the app also builds and passes its engine tests against a shared-library engine laid out like the bayan-core C SDK.
 name: CI
@@ -17,10 +19,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Ubuntu packages Qt needs to build and to run headless, from the Ubuntu archive frozen at a date (same as the cloud environment).
+  # Ubuntu packages Qt needs to build and to run headless, from the Ubuntu archive frozen at a date (same as the cloud environment, and as the C++ job of codeql.yml: tests/workflows/test_ubuntu_packages.py keeps the two workflows equal).
   UBUNTU_SNAPSHOT: 20261003T000000Z
   UBUNTU_PACKAGES: libgl-dev libegl-dev libvulkan-dev libxkbcommon-dev libfontconfig-dev libdbus-1-dev
-  PYTHON_VERSION: 3.14.8 # released 2026-09-30
 
 jobs:
   linux:
@@ -35,10 +36,19 @@ jobs:
           # The full history: the supply_chain.qt_release_age test finds the commit that pinned the Qt version in deps/qt.json.
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        id: python
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Use the runner's own Python 3 (3.11 or newer; nothing is downloaded)
+        run: |
+          # Every python3 and python on PATH, in order, until one is 3.11 or newer: on Windows python3 can be the Microsoft Store's placeholder,
+          # and on macOS Apple's /usr/bin/python3 is 3.9. The later steps, scripts/dev-setup.sh included, use the one found here ($PYTHON).
+          while IFS= read -r candidate; do
+            if "$candidate" -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+              "$candidate" -c 'import platform, sys; print("Python", platform.python_version(), "at", sys.executable)'
+              echo "PYTHON=$candidate" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done < <(type -ap python3 python)
+          echo 'No Python 3.11 or newer on PATH' >&2
+          exit 1
       - name: Install Ubuntu packages
         run: |
           sudo apt-get update --snapshot "$UBUNTU_SNAPSHOT"
@@ -46,12 +56,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends --snapshot "$UBUNTU_SNAPSHOT" $UBUNTU_PACKAGES
       - name: The pinned Qt release is at least 24 hours old (ADR-0017 rule 4), checked before Qt is installed and its tools run in the build
         run: '"$PYTHON" scripts/check-qt-release-age.py'
-        env:
-          PYTHON: ${{ steps.python.outputs.python-path }}
       - name: Install pinned tools and Qt
         run: scripts/dev-setup.sh
-        env:
-          PYTHON: ${{ steps.python.outputs.python-path }}
       - name: Verification gate (build, clang-format, clang-tidy, qmllint, tests, headless smoke test)
         run: cmake --workflow --preset verify
       - name: Engine SDK path (stub built as a stand-in SDK; build and engine tests with BAYAN_ENGINE=sdk)
@@ -69,10 +75,19 @@ jobs:
           # The full history: the supply_chain.qt_release_age test finds the commit that pinned the Qt version in deps/qt.json.
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        id: python
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Use the runner's own Python 3 (3.11 or newer; nothing is downloaded)
+        run: |
+          # Every python3 and python on PATH, in order, until one is 3.11 or newer: on Windows python3 can be the Microsoft Store's placeholder,
+          # and on macOS Apple's /usr/bin/python3 is 3.9. The later steps, scripts/dev-setup.sh included, use the one found here ($PYTHON).
+          while IFS= read -r candidate; do
+            if "$candidate" -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+              "$candidate" -c 'import platform, sys; print("Python", platform.python_version(), "at", sys.executable)'
+              echo "PYTHON=$candidate" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done < <(type -ap python3 python)
+          echo 'No Python 3.11 or newer on PATH' >&2
+          exit 1
       - name: Install Ubuntu packages
         run: |
           sudo apt-get update --snapshot "$UBUNTU_SNAPSHOT"
@@ -80,12 +95,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends --snapshot "$UBUNTU_SNAPSHOT" $UBUNTU_PACKAGES
       - name: The pinned Qt release is at least 24 hours old (ADR-0017 rule 4), checked before Qt is installed and its tools run in the build
         run: '"$PYTHON" scripts/check-qt-release-age.py'
-        env:
-          PYTHON: ${{ steps.python.outputs.python-path }}
       - name: Install pinned tools and Qt
         run: scripts/dev-setup.sh
-        env:
-          PYTHON: ${{ steps.python.outputs.python-path }}
       - name: Sanitizer build and tests
         run: cmake --workflow --preset asan
 
@@ -101,18 +112,23 @@ jobs:
           # The full history: the supply_chain.qt_release_age test finds the commit that pinned the Qt version in deps/qt.json.
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        id: python
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Use the runner's own Python 3 (3.11 or newer; nothing is downloaded)
+        run: |
+          # Every python3 and python on PATH, in order, until one is 3.11 or newer: on Windows python3 can be the Microsoft Store's placeholder,
+          # and on macOS Apple's /usr/bin/python3 is 3.9. The later steps, scripts/dev-setup.sh included, use the one found here ($PYTHON).
+          while IFS= read -r candidate; do
+            if "$candidate" -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+              "$candidate" -c 'import platform, sys; print("Python", platform.python_version(), "at", sys.executable)'
+              echo "PYTHON=$candidate" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done < <(type -ap python3 python)
+          echo 'No Python 3.11 or newer on PATH' >&2
+          exit 1
       - name: The pinned Qt release is at least 24 hours old (ADR-0017 rule 4), checked before Qt is installed and its tools run in the build
         run: '"$PYTHON" scripts/check-qt-release-age.py'
-        env:
-          PYTHON: ${{ steps.python.outputs.python-path }}
       - name: Install pinned tools and Qt
         run: scripts/dev-setup.sh
-        env:
-          PYTHON: ${{ steps.python.outputs.python-path }}
       - name: Build and test (including the headless smoke test)
         run: cmake --workflow --preset ci
       - name: Engine SDK path (stub built as a stand-in SDK; build and engine tests with BAYAN_ENGINE=sdk)
@@ -133,18 +149,23 @@ jobs:
           # The full history: the supply_chain.qt_release_age test finds the commit that pinned the Qt version in deps/qt.json.
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        id: python
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Use the runner's own Python 3 (3.11 or newer; nothing is downloaded)
+        run: |
+          # Every python3 and python on PATH, in order, until one is 3.11 or newer: on Windows python3 can be the Microsoft Store's placeholder,
+          # and on macOS Apple's /usr/bin/python3 is 3.9. The later steps, scripts/dev-setup.sh included, use the one found here ($PYTHON).
+          while IFS= read -r candidate; do
+            if "$candidate" -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+              "$candidate" -c 'import platform, sys; print("Python", platform.python_version(), "at", sys.executable)'
+              echo "PYTHON=$candidate" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done < <(type -ap python3 python)
+          echo 'No Python 3.11 or newer on PATH' >&2
+          exit 1
       - name: The pinned Qt release is at least 24 hours old (ADR-0017 rule 4), checked before Qt is installed and its tools run in the build
         run: '"$PYTHON" scripts/check-qt-release-age.py'
-        env:
-          PYTHON: ${{ steps.python.outputs.python-path }}
       - name: Install pinned tools and Qt
         run: scripts/dev-setup.sh
-        env:
-          PYTHON: ${{ steps.python.outputs.python-path }}
       - name: Set up the MSVC developer environment (x64)
         shell: pwsh
         run: |
