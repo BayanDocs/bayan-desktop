@@ -53,7 +53,8 @@ std::vector<ImeAction> ImeTranslator::translate(const QInputMethodEvent &event) 
       actions.push_back({.kind = ImeAction::Kind::End});
       reset();
     }
-    const int before = std::min(replaceLength, -replaceFrom);
+    // Widened before negating: -replaceFrom does not fit an int when replaceFrom is its smallest value.
+    const auto before = static_cast<int>(std::min<qint64>(replaceLength, -static_cast<qint64>(replaceFrom)));
     const int after = replaceLength - before;
     if (before > 0) {
       actions.push_back({.kind = ImeAction::Kind::DeleteBefore, .length = before});

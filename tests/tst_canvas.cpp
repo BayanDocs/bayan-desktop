@@ -15,12 +15,15 @@
 #include <QtGui/QAccessible>
 #include <QtGui/QAccessibleEditableTextInterface>
 #include <QtGui/QAccessibleTextInterface>
+#include <QtGui/QGuiApplication>
 #include <QtGui/QInputMethodEvent>
+#include <QtGui/QStyleHints>
 #include <QtGui/QTextCharFormat>
 #include <QtQuick/QQuickWindow>
 #include <QtTest/QTest>
 
 #include <algorithm>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -202,7 +205,9 @@ private slots:
   void koreanSyllablesCommitOneByOne();
   void cancelledCompositionLeavesTheText();
   void accentMenuReplacesTheCharacterBeforeTheCaret();
+  void deletingAroundTheCaretStaysInTheEditableText();
   void clickMovesTheCaret();
+  void doubleClickIsTwoPressesAndTwoReleases();
   void inputMethodSeesTheCaretAndTheTextAroundIt();
   void accessibilityExposesTheDocumentText();
   void accessibilityReportsTextAndCaretChanges();
@@ -460,6 +465,31 @@ void TestCanvas::accentMenuReplacesTheCharacterBeforeTheCaret() {
   QTRY_COMPARE(editableText(*fixture->session), u"café"_s);
 }
 
+void TestCanvas::deletingAroundTheCaretStaysInTheEditableText() {
+  // The counts come from the input method. Without editable text (the stub), or with none around the caret (the mock document's empty
+  // line), the engine is not asked to delete anything.
+  const auto fixture = openDocument();
+  QVERIFY(fixture);
+  bayan::DocumentCanvas &canvas = *fixture->canvas;
+  QTest::qWait(250); // Let a delayed view.set go first.
+  const qint64 before = fixture->engine->lastPostedRequest();
+  canvas.deleteAroundCaret(1'000'000, 1'000'000);
+  QCOMPARE(fixture->engine->lastPostedRequest(), before);
+  if (!fixture->hasMockDocument()) {
+    QVERIFY2(!mockDocumentRequired(), "the engine has no mock document");
+    return;
+  }
+  // Replacements that reach beyond either end of the text delete up to that end.
+  typeText(fixture->window.get(), u"abc"_s);
+  QTest::keyClick(fixture->window.get(), Qt::Key_Left);
+  QTRY_COMPARE(caretOffset(*fixture->session), 2);
+  sendIme(&canvas, QString(), {}, u"X"_s, std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
+  QTRY_COMPARE(editableText(*fixture->session), u"Xc"_s);
+  QTRY_COMPARE(caretOffset(*fixture->session), 1);
+  sendIme(&canvas, QString(), {}, u"Y"_s, 0, std::numeric_limits<int>::max());
+  QTRY_COMPARE(editableText(*fixture->session), u"XY"_s);
+}
+
 void TestCanvas::clickMovesTheCaret() {
   const auto fixture = openDocument();
   QVERIFY(fixture);
@@ -480,6 +510,24 @@ void TestCanvas::clickMovesTheCaret() {
   QTRY_COMPARE(caretOffset(*fixture->session), 2);
   typeText(fixture->window.get(), u"X"_s);
   QTRY_COMPARE(editableText(*fixture->session), u"abXcdef"_s);
+}
+
+void TestCanvas::doubleClickIsTwoPressesAndTwoReleases() {
+  // Works with either engine: every pointer message is a request, so the engine's request count tells how many the canvas sent.
+  const auto fixture = openDocument();
+  QVERIFY(fixture);
+  QWindow *window = fixture->window.get();
+  const QPoint point = fixture->canvas->mapToScene(QPointF(200, 200)).toPoint();
+  // Let a delayed view.set go first; then nothing but the clicks sends messages.
+  QTest::qWait(250);
+  const qint64 before = fixture->engine->lastPostedRequest();
+  QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, point);
+  QCOMPARE(fixture->engine->lastPostedRequest() - before, 2);
+  // Qt Quick delivers a double click as press, release, press, double click, release: the engine gets two presses (the second with two
+  // clicks) and two releases, not a third press without a release.
+  QTest::qWait(QGuiApplication::styleHints()->mouseDoubleClickInterval() + 50);
+  QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, point);
+  QCOMPARE(fixture->engine->lastPostedRequest() - before, 6);
 }
 
 void TestCanvas::inputMethodSeesTheCaretAndTheTextAroundIt() {

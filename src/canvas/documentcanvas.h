@@ -139,7 +139,8 @@ public:
   // does not spend time reporting text changes.
   void setAccessibleInterfaceActive(bool active) { accessibleInterfaceActive_ = active; }
   // Deletes text next to the caret, counted in UTF-16 code units, with Backspace and Delete keys: protocol v0 has no message that deletes
-  // a range, so input methods and accessibility edits that replace text use this (see ImeTranslator).
+  // a range, so input methods and accessibility edits that replace text use this (see ImeTranslator). Deletes no more than the editable
+  // text at the caret holds, and nothing without one.
   void deleteAroundCaret(int unitsBefore, int unitsAfter);
 
   // Settings and figures for the benchmark and the tests.

@@ -319,19 +319,18 @@ void DocumentCanvas::revealItemRect(const QRectF &rect) {
 int DocumentCanvas::accessibleCursorPosition() const { return accessibleCursor_; }
 
 void DocumentCanvas::deleteAroundCaret(int unitsBefore, int unitsAfter) {
-  if (session_ == nullptr || (unitsBefore <= 0 && unitsAfter <= 0)) {
+  // The engine deletes one character per key: count the characters the code units hold, in the editable text around the caret. The counts
+  // come from the input method, so only the text there is can be deleted; without editable text at the caret, nothing can.
+  const auto context = session_ != nullptr ? editContext() : std::nullopt;
+  if (!context) {
     return;
   }
-  // The engine deletes one character per key; count the characters the code units hold, from the text around the caret.
-  int before = unitsBefore;
-  int after = unitsAfter;
-  if (const auto context = editContext()) {
-    const QStringView text(context->text);
-    const int start = std::max(0, context->cursor - std::max(0, unitsBefore));
-    const int end = std::min(static_cast<int>(text.size()), context->cursor + std::max(0, unitsAfter));
-    before = characterCount(text.sliced(start, context->cursor - start));
-    after = characterCount(text.sliced(context->cursor, end - context->cursor));
-  }
+  const QStringView text(context->text);
+  const qsizetype cursor = context->cursor;
+  const qsizetype start = cursor - std::clamp<qsizetype>(unitsBefore, 0, cursor);
+  const qsizetype end = cursor + std::clamp<qsizetype>(unitsAfter, 0, text.size() - cursor);
+  const int before = characterCount(text.sliced(start, cursor - start));
+  const int after = characterCount(text.sliced(cursor, end - cursor));
   for (int i = 0; i < before; ++i) {
     session_->sendKey({.key = u"Backspace"_s, .code = u"Backspace"_s});
   }
@@ -931,8 +930,9 @@ void DocumentCanvas::pointerPressed(QMouseEvent *event) {
 void DocumentCanvas::mousePressEvent(QMouseEvent *event) { pointerPressed(event); }
 
 void DocumentCanvas::mouseDoubleClickEvent(QMouseEvent *event) {
-  // Qt delivers the second press of a double click here instead of to mousePressEvent.
-  pointerPressed(event);
+  // Qt Quick delivers the second press of a double click to mousePressEvent, which counted it as the second click, and then this event for
+  // the same press. Accept it, so that it goes nowhere else, and send nothing: the engine would see a third press without a release.
+  event->accept();
 }
 
 void DocumentCanvas::mouseMoveEvent(QMouseEvent *event) {

@@ -11,6 +11,8 @@
 #include <QtGui/QTextCharFormat>
 #include <QtTest/QTest>
 
+#include <limits>
+
 using namespace Qt::StringLiterals;
 using namespace bayan;
 using Kind = ImeAction::Kind;
@@ -274,6 +276,14 @@ void TestInput::deleteSurroundingTextBecomesDeletions() {
   QCOMPARE(translateCommit(ime, QString(), 0, 2), (std::vector<ImeAction>{{.kind = Kind::DeleteAfter, .length = 2}}));
   // A range that starts after the caret cannot be expressed in protocol v0 and is left out; the commit still happens.
   QCOMPARE(translateCommit(ime, u"x"_s, 1, 1), (std::vector<ImeAction>{{.kind = Kind::Commit, .text = u"x"_s}}));
+  // The input method decides the numbers: the extremes of int pass through without overflowing (the canvas deletes only the text there
+  // is).
+  constexpr int kMin = std::numeric_limits<int>::min();
+  constexpr int kMax = std::numeric_limits<int>::max();
+  QCOMPARE(translateCommit(ime, QString(), kMin, 3), (std::vector<ImeAction>{{.kind = Kind::DeleteBefore, .length = 3}}));
+  QCOMPARE(translateCommit(ime, QString(), kMin, kMax), (std::vector<ImeAction>{{.kind = Kind::DeleteBefore, .length = kMax}}));
+  QCOMPARE(translateCommit(ime, QString(), -1, kMax),
+           (std::vector<ImeAction>{{.kind = Kind::DeleteBefore, .length = 1}, {.kind = Kind::DeleteAfter, .length = kMax - 1}}));
 }
 
 void TestInput::replacingDuringACompositionEndsItFirst() {
