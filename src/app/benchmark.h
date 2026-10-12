@@ -18,6 +18,7 @@
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QJsonObject>
 #include <QtCore/QObject>
+#include <QtCore/QPointer>
 #include <QtCore/QString>
 #include <QtCore/QTimer>
 
@@ -73,7 +74,8 @@ private:
   QQmlApplicationEngine &qml_;
   DocumentSession &session_;
   Options options_;
-  QQuickWindow *window_ = nullptr;
+  // Guarded: the window goes before this object when the application ends.
+  QPointer<QQuickWindow> window_;
   DocumentCanvas *canvas_ = nullptr;
   Phase phase_ = Phase::Waiting;
   QTimer poll_;

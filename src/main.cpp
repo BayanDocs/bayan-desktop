@@ -59,6 +59,10 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
   bayan::DocumentSession session(*engine);
+  // Declared before the QML engine, so they are destroyed after its window: with Qt's threaded render loop, the window's render thread may
+  // still report a frame to the benchmark (frameSwapped) while main returns.
+  std::unique_ptr<bayan::SmokeTest> smokeTest;
+  std::unique_ptr<bayan::Benchmark> benchmark;
 
   // Declared after the engine and the session, so it is destroyed before them: the document canvas it owns uses both.
   QQmlApplicationEngine qml;
@@ -75,8 +79,6 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  std::unique_ptr<bayan::SmokeTest> smokeTest;
-  std::unique_ptr<bayan::Benchmark> benchmark;
   if (parser.isSet(smokeTestOption)) {
     smokeTest = std::make_unique<bayan::SmokeTest>(qml, session);
     smokeTest->start();
