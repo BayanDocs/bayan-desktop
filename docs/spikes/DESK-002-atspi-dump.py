@@ -5,8 +5,10 @@ It finds the app on the accessibility bus, prints its accessible objects, then t
 positions, inserts "hello" at the caret through the editable-text interface, and prints the text-changed and caret-moved events that come
 back. It is evidence for the Linux bridge, not a replacement for a screen reader.
 
-On Ubuntu 24.04 it needs `sudo apt install python3-pyatspi`, and the system's Python, `python3.12`, which the package was built for. On a desktop session, start the app built against the real engine, then run this script. Without a desktop (a cloud computer), start
-the accessibility bus and the app under Xvfb first; the DESK-002 report's "How to reproduce" shows how.
+On Ubuntu 24.04 it needs python3-pyatspi, installed from Ubuntu's archive frozen at CI's date as the DESK-002 report's "How to reproduce"
+shows, and the system's Python, `python3.12`, which the package was built for. On a desktop session, start the app built against the real
+engine, then run this script. Without a desktop (a cloud computer), start the accessibility bus and the app under Xvfb first; "How to
+reproduce" shows that too.
 """
 
 from __future__ import annotations

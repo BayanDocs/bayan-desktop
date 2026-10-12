@@ -72,10 +72,12 @@ The reference laptops are the plan's reference hardware ([requirements](https://
 Any computer with a graphics card will do; the simplest is the Windows reference laptop running Ubuntu 24.04 LTS from a USB stick ("Try Ubuntu" is enough, though a few gigabytes of free space on the stick or an installation keeps the build between restarts) or from a second partition. Use the laptop's own screen.
 
 1. On the login screen, choose the **Ubuntu on Xorg** session (the gear icon at the bottom right). The Qt that `scripts/dev-setup.sh` installs has no Wayland plugin yet, so on Ubuntu's default Wayland session the app would run through XWayland, which GNOME 46 enlarges after drawing instead of letting the app draw sharp pixels at high DPI.
-2. In a terminal, install the compiler, the packages Qt needs and Orca's speech:
+2. In a terminal, install the compiler, the packages Qt needs and Orca's speech. They come from Ubuntu's archive as it was on the date CI installs from, the value of `UBUNTU_SNAPSHOT` in `.github/workflows/ci.yml` (20261003T000000Z when this was written; use the value there if it has changed), so the computer gets the versions CI builds with and nothing published less than 24 hours earlier (ADR-0017):
    ```sh
-   sudo apt update && sudo apt install build-essential git python3-venv libgl-dev libegl-dev libvulkan-dev libxkbcommon-dev libfontconfig-dev libdbus-1-dev libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 orca
+   sudo apt-get update --snapshot 20261003T000000Z
+   sudo apt-get install --snapshot 20261003T000000Z build-essential git python3-venv libgl-dev libegl-dev libvulkan-dev libxkbcommon-dev libfontconfig-dev libdbus-1-dev libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 orca
    ```
+   If apt stops with "unmet dependencies" because Ubuntu's updates already gave the computer a newer version of a library than that date has, use the archive as it was at the start of yesterday (UTC), which is also at least 24 hours old: run both commands again with the date that `date -u -d yesterday +%Y%m%dT000000Z` prints, and write that date down with the results.
 3. Get the code and the pinned tools, and the engine (`scripts/build-engine-sdk.sh` after installing rustup from [rustup.rs](https://rustup.rs), or the artifact `bayan-core-sdk-x86_64-unknown-linux-gnu` from [the same CI run](https://github.com/BayanDocs/bayan-core/actions/runs/38177097534), SHA-256 `a5153f7fe6b1b444067cae4cab54f42fd933e95522f02367fd42598c626ced05`, checked and unpacked as on macOS with `sha256sum` instead of `shasum -a 256`):
    ```sh
    git clone https://github.com/BayanDocs/bayan-desktop.git && cd bayan-desktop

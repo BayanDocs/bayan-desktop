@@ -174,12 +174,17 @@ The editable line during composition, from top to bottom: Japanese kana being co
 ## 10. How to reproduce
 
 ```sh
+# The Ubuntu 24.04 packages installed for this report, on a cloud computer that already had xvfb and Mesa, from Ubuntu's archive frozen at
+# CI's date (UBUNTU_SNAPSHOT in .github/workflows/ci.yml): the libxcb ones for Qt's xcb plugin, the others for the AT-SPI check, to which
+# apt adds gir1.2-freedesktop and libatk-adaptor
+sudo apt-get update --snapshot 20261003T000000Z
+sudo apt-get install --no-install-recommends --snapshot 20261003T000000Z libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 at-spi2-core python3-pyatspi gir1.2-atspi-2.0
 scripts/dev-setup.sh && . ~/.local/share/bayandocs/desktop-tools/env.sh
 scripts/build-engine-sdk.sh                                    # bayan-core's C SDK at the pinned commit (needs rustup)
 BAYAN_REQUIRE_MOCK_DOCUMENT=1 scripts/test-engine-sdk.sh --sdk build/bayan-core-sdk
 QT_QPA_PLATFORM=offscreen build/engine-sdk/src/bayan-desktop --benchmark results.json
 xvfb-run -a env QT_QPA_PLATFORM=xcb QSG_RHI_BACKEND=opengl build/engine-sdk/src/bayan-desktop --benchmark results-gl.json
-# The canvas through AT-SPI, without a desktop (Ubuntu 24.04: sudo apt install at-spi2-core python3-pyatspi xvfb)
+# The canvas through AT-SPI, without a desktop
 dbus-run-session -- sh -c '/usr/libexec/at-spi-bus-launcher --launch-immediately & sleep 2
   QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 xvfb-run -a env QT_QPA_PLATFORM=xcb build/engine-sdk/src/bayan-desktop & sleep 8
   python3.12 docs/spikes/DESK-002-atspi-dump.py'   # Ubuntu 24.04's own Python, which python3-pyatspi is built for
