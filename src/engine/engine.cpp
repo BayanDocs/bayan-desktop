@@ -156,6 +156,14 @@ void Engine::dispatch(const QByteArray &json) {
       emit protocolError(u"The engine sent a malformed reply."_s);
       return;
     }
+    // The engine handles requests in the order they were posted and answers each (engine protocol §8), so replies answer requests that
+    // were posted, in increasing order. The session decides which request caused an event by the last reply; a reply to anything else
+    // would make it judge every tile stale for good.
+    if (requestId <= lastReply_ || requestId > lastPostedRequest()) {
+      emit protocolError(u"The engine sent a reply to a request it was not answering."_s);
+      return;
+    }
+    lastReply_ = requestId;
     emit replyReceived(requestId, ok.toBool(), message.value(u"payload"_s).toObject(), message.value(u"error"_s).toObject());
     return;
   }

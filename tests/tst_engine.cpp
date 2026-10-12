@@ -83,6 +83,7 @@ private slots:
   void invalidTileRequestsAreRefused();
   void deliveriesFromAnotherThreadArriveOnTheMainThread();
   void malformedEngineMessagesAreProtocolErrors();
+  void repliesMustAnswerPostedRequestsInOrder();
   void oversizedEngineMessagesAreRejected();
   void destroyingWhileBusyIsSafe();
 
@@ -313,6 +314,28 @@ void TestEngine::malformedEngineMessagesAreProtocolErrors() {
   QTRY_COMPARE(errors.count(), malformed.size());
   QCOMPARE(events.count(), 0);
   QCOMPARE(replies.count(), 0);
+}
+
+void TestEngine::repliesMustAnswerPostedRequestsInOrder() {
+  const auto engine = bayan::Engine::create();
+  QVERIFY(engine);
+  QSignalSpy errors(engine.get(), &bayan::Engine::protocolError);
+  QSignalSpy replies(engine.get(), &bayan::Engine::replyReceived);
+  // A reply to a request that was never posted.
+  deliver(*engine, R"({"v":0,"re":1,"ok":true})"_ba);
+  QTRY_COMPARE(errors.count(), 1);
+  QCOMPARE(replies.count(), 0);
+  // The engine's own reply is accepted; a second reply to the same request, or one to a request answered already, is not.
+  const qint64 first = engine->request(u"no.such.message"_s);
+  QVERIFY(!waitForReply(replies, first).isEmpty());
+  const qint64 second = engine->request(u"no.such.message"_s);
+  QVERIFY(!waitForReply(replies, second).isEmpty());
+  const int answered = static_cast<int>(replies.count());
+  for (const qint64 id : {second, first}) {
+    deliver(*engine, R"({"v":0,"re":)"_ba + QByteArray::number(id) + R"(,"ok":true})"_ba);
+  }
+  QTRY_COMPARE(errors.count(), 3);
+  QCOMPARE(replies.count(), answered);
 }
 
 void TestEngine::oversizedEngineMessagesAreRejected() {

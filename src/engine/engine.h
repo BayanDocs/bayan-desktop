@@ -82,7 +82,8 @@ public:
   void deliverFromEngineThread(const std::uint8_t *json, std::size_t length) noexcept;
 
 signals:
-  // An answer to request(). On success, ok is true and payload holds the answer; otherwise error holds { code, message_id, args }.
+  // An answer to request(). On success, ok is true and payload holds the answer; otherwise error holds { code, message_id, args }. Replies
+  // arrive in the order of their requests; one that answers no request posted, or comes out of order, is a protocolError instead.
   void replyReceived(qint64 requestId, bool ok, const QJsonObject &payload, const QJsonObject &error);
   // An event pushed by the engine, such as view.pages or engine.error.
   void eventReceived(const QString &type, const QJsonObject &payload);
@@ -101,6 +102,8 @@ private:
   std::unique_ptr<BayanEngine, HandleDeleter> handle_;
   qint64 nextRequestId_ = 1;
   std::atomic<qint64> lastPostedRequest_{0};
+  // The request the last reply answered.
+  qint64 lastReply_ = 0;
   // Messages that could not be copied on the engine thread (out of memory); reported with the next message that arrives.
   std::atomic<int> lostMessages_{0};
 };

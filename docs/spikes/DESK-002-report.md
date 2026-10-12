@@ -126,7 +126,7 @@ Each of these is a proposal for the engine protocol's next version; the shell wo
 5. **No way to move the caret to an offset.** Screen readers move the caret when the user navigates by word or line; `setCursorPosition` does nothing. Proposal: `input.set_selection {node, offset, anchor?}`.
 6. **No selection in the accessibility data**, so screen readers cannot read the selection. Proposal: selection ranges next to the accessibility caret.
 7. **No line ranges in accessibility nodes.** A wrapped paragraph is one line for the screen reader, which reads it whole on "next line". Proposal: the start offset of each visual line in nodes with text.
-8. **Events do not say which request caused them.** The shell infers it from the order of replies, which the protocol guarantees but which is easy to break. Proposal: a `cause` field on `render.invalidate`.
+8. **Events do not say which request caused them.** The shell infers it from the order of replies, which the protocol guarantees but which is easy to break; the shell treats a reply that answers no request it sent, or that comes out of order, as a protocol error, because such a reply would make it judge every tile stale. Proposal: a `cause` field on `render.invalidate`.
 9. **Tile rendering and input share the engine's single thread**, so tiles wait behind input and input behind tiles. PERF-04 will need rendering that does not block input, for example rendering from a snapshot on another thread.
 10. **DOM `code` values** (the physical key) are sent only for keys whose position does not depend on the keyboard layout, because Qt has no portable scan-code table. If the engine ever needs physical keys for letters, the shell needs a table per platform.
 
