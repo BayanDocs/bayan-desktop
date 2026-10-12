@@ -5,22 +5,43 @@ qt_import_plugins(tst_engine EXCLUDE_BY_TYPE permissions) # See src/CMakeLists.t
 bayan_deploy_engine_runtime(tst_engine)
 add_test(NAME engine.wrapper COMMAND tst_engine)
 
-# Unit tests for the document session (src/app), against the stub engine. The session's source is compiled into the test as well, because the
-# application's QML module owns it.
-qt_add_executable(tst_documentsession tst_documentsession.cpp
-  "${PROJECT_SOURCE_DIR}/src/app/documentsession.cpp" "${PROJECT_SOURCE_DIR}/src/app/documentsession.h")
-target_include_directories(tst_documentsession PRIVATE "${PROJECT_SOURCE_DIR}/src/app")
-target_link_libraries(tst_documentsession PRIVATE bayan_engine Qt6::Gui Qt6::Qml Qt6::Test bayan::compile_options)
+# Unit tests for the document session (src/app).
+qt_add_executable(tst_documentsession tst_documentsession.cpp)
+target_link_libraries(tst_documentsession PRIVATE bayan_shell Qt6::Test bayan::compile_options)
 qt_import_plugins(tst_documentsession EXCLUDE_BY_TYPE permissions) # See src/CMakeLists.txt.
 bayan_deploy_engine_runtime(tst_documentsession)
 add_test(NAME app.document_session COMMAND tst_documentsession)
 
-# Headless smoke test: the application starts with the offscreen platform plugin, shows the stub engine's page, checks its pixels and exits.
+# Tests of the document canvas in a window (src/canvas, src/a11y): pixels, scrolling, zoom, keys, input-method composition and the
+# accessibility bridge, against the engine the build links. Tests that need the real engine's mock document skip with the stub.
+qt_add_executable(tst_canvas tst_canvas.cpp)
+target_link_libraries(tst_canvas PRIVATE bayan_shell Qt6::Quick Qt6::Test bayan::compile_options)
+qt_import_plugins(tst_canvas EXCLUDE_BY_TYPE permissions) # See src/CMakeLists.txt.
+bayan_deploy_engine_runtime(tst_canvas)
+add_test(NAME app.canvas COMMAND tst_canvas)
+# The same at 125 % scaling, a fractional device pixel ratio as on many Windows laptops: tiles must still land on whole device pixels.
+add_test(NAME app.canvas_scale125 COMMAND tst_canvas)
+
+# Unit tests of the shell's pure logic, which needs no engine: the protocol parsers, the tile arithmetic and cache, the key and input-method
+# translation, and the accessible text.
+foreach(unit IN ITEMS protocol tiles input accessibletext)
+  qt_add_executable(tst_${unit} tst_${unit}.cpp)
+  target_link_libraries(tst_${unit} PRIVATE bayan_shell Qt6::Test bayan::compile_options)
+  qt_import_plugins(tst_${unit} EXCLUDE_BY_TYPE permissions) # See src/CMakeLists.txt.
+  bayan_deploy_engine_runtime(tst_${unit})
+  add_test(NAME unit.${unit} COMMAND tst_${unit})
+  set_tests_properties(unit.${unit} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1" TIMEOUT 60)
+endforeach()
+
+# Headless smoke test: the application starts with the offscreen platform plugin, shows the engine's first page, checks its pixels and exits.
 add_test(NAME app.smoke COMMAND bayan-desktop --smoke-test)
 
 # Every test runs without a screen and with Qt's standard settings, whatever the developer's environment says.
-set_tests_properties(engine.wrapper app.document_session app.smoke PROPERTIES
+set_tests_properties(engine.wrapper app.document_session app.canvas app.smoke PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1"
+  TIMEOUT 120)
+set_tests_properties(app.canvas_scale125 PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1.25"
   TIMEOUT 120)
 
 # The Qt licensing policy (cmake/BayanQtPolicy.cmake): configuring small fixture projects must fail for forbidden, unreviewed or static Qt

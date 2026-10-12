@@ -4,7 +4,8 @@
 // - It sends protocol messages as JSON and turns the engine's replies and events into Qt signals.
 // - The engine calls back on its own thread; the wrapper copies each message and hands it to the thread that owns the Engine object
 //   (normally the main thread), so signals are always emitted there. Nothing ever calls back into the engine from the engine thread.
-// Use an Engine only from the thread that created it.
+// Use an Engine only from the thread that created it, except renderTile() and lastPostedRequest(), which any thread may call while the
+// Engine exists (the document canvas renders tiles on a thread of its own, so that scrolling never waits for the engine).
 
 #pragma once
 
@@ -51,11 +52,18 @@ public:
   // The engine's version string.
   static QString version();
 
-  // Sends a fire-and-forget message. Returns false if the engine refused it.
+  // Sends a fire-and-forget message. Returns false if the engine refused it. Prefer request(): the engine answers every request before it
+  // sends the events that handling it caused, so the reply tells the shell which message an event belongs to (see lastPostedRequest()).
   bool post(const QString &type, const QJsonObject &payload = {});
 
   // Sends a request and returns its identifier (greater than 0), or 0 if the engine refused it. The answer arrives through replyReceived.
+  // Identifiers increase with every request, so they also count the requests in the order they were posted.
   qint64 request(const QString &type, const QJsonObject &payload = {});
+
+  // The identifier of the last request that was posted successfully, or 0. Any thread may read it. The engine handles messages and tiles
+  // in the order they reach it (engine protocol §8), so a tile rendered by a call that started after this function returned N shows the
+  // document as it was after the engine handled request N.
+  [[nodiscard]] qint64 lastPostedRequest() const { return lastPostedRequest_.load(std::memory_order_acquire); }
 
   // Copies bytes into a new engine blob. Returns 0 on failure.
   BlobId putBlob(const QByteArray &bytes);
@@ -65,7 +73,8 @@ public:
   bool releaseBlob(BlobId id);
 
   // Renders a tile synchronously: request is a render.tile payload (engine protocol §6) and pixelSize the tile's size in pixels.
-  // Returns a premultiplied RGBA image, or a null image if the engine refused the request.
+  // Returns a premultiplied RGBA image, or a null image if the engine refused the request. Any thread may call it while the Engine exists,
+  // except the engine's own thread; it waits until the engine has handled every message posted before it.
   QImage renderTile(const QJsonObject &request, QSize pixelSize);
 
   // Receives one message on the engine thread: copies it and queues it for this object's thread. Called by the engine callback; public so
@@ -91,6 +100,7 @@ private:
 
   std::unique_ptr<BayanEngine, HandleDeleter> handle_;
   qint64 nextRequestId_ = 1;
+  std::atomic<qint64> lastPostedRequest_{0};
   // Messages that could not be copied on the engine thread (out of memory); reported with the next message that arrives.
   std::atomic<int> lostMessages_{0};
 };

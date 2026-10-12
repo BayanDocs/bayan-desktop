@@ -14,4 +14,7 @@ QtObject {
     readonly property color accent: dark ? "#6ea8ff" : "#1f5fbf"
     readonly property color canvas: dark ? "#141414" : "#e6e6e6"
     readonly property color pageShadow: dark ? "#66000000" : "#33000000"
+    // Where a page's tiles have not arrived yet: near the paper's white, so the page does not flash while scrolling.
+    readonly property color pagePlaceholder: dark ? "#d9d9d9" : "#fafafa"
+    readonly property color selection: "#5a3399ff"
 }

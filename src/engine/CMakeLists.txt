@@ -35,7 +35,7 @@ else()
 endif()
 message(STATUS "Engine: ${BAYAN_ENGINE}")
 
-add_library(bayan_engine STATIC engine.cpp engine.h)
+add_library(bayan_engine STATIC engine.cpp engine.h protocol.cpp protocol.h)
 target_include_directories(bayan_engine PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(bayan_engine
   PUBLIC Qt6::Core Qt6::Gui

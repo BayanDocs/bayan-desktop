@@ -5,8 +5,10 @@
 // For tests of the shell's error paths, the configuration JSON may contain {"test": {"doc_open": "fail"}} (doc.open is refused) or
 // {"test": {"doc_open": "ignore"}} (doc.open is never answered). Anything else in "test" makes bayan_engine_new fail.
 //
-// It understands only what the shell scaffold needs: the hello/welcome handshake, doc.open (always opens the test page), view.set and
-// doc.close. Everything else is answered with an "unsupported_message" error.
+// It understands only what the shell needs to show a page: the hello/welcome handshake, doc.open (always opens the test page), view.set
+// (answered with the events engine protocol §6.2 lists: view.pages, render.invalidate, view.layout.progress and overlay.update) and
+// doc.close. Everything else, input and accessibility included, is answered with an "unsupported_message" error: the real engine from
+// bayan-core (BAYAN_ENGINE=sdk) is the one to test those against.
 
 #include "bayan_ffi.h"
 
@@ -315,13 +317,21 @@ void BayanEngine::handleMessage(qint64 id, const QString &type, const QJsonObjec
     reply(id, {}, {});
     const QJsonObject pageRect{{u"x"_s, 0}, {u"y"_s, 0}, {u"width"_s, kPageWidth}, {u"height"_s, kPageHeight}};
     event(u"view.pages"_s,
-          QJsonObject{{u"doc_id"_s, kDocumentId},
-                      {u"pages"_s,
-                       QJsonArray{QJsonObject{{u"index"_s, 0}, {u"width"_s, kPageWidth}, {u"height"_s, kPageHeight}, {u"section"_s, 0}}}}});
+          QJsonObject{
+              {u"doc_id"_s, kDocumentId},
+              {u"pages"_s,
+               QJsonArray{QJsonObject{
+                   {u"index"_s, 0}, {u"width"_s, kPageWidth}, {u"height"_s, kPageHeight}, {u"section"_s, 0}, {u"x"_s, 0}, {u"y"_s, 0}}}}});
     event(u"render.invalidate"_s,
           QJsonObject{{u"doc_id"_s, kDocumentId}, {u"regions"_s, QJsonArray{QJsonObject{{u"page"_s, 0}, {u"rect"_s, pageRect}}}}});
     event(u"view.layout.progress"_s,
           QJsonObject{{u"doc_id"_s, kDocumentId}, {u"pages_laid_out"_s, 1}, {u"page_count_estimate"_s, 1}, {u"complete"_s, true}});
+    // The test page has no caret and no selection.
+    event(u"overlay.update"_s, QJsonObject{{u"doc_id"_s, kDocumentId},
+                                           {u"caret"_s, QJsonValue::Null},
+                                           {u"selection"_s, QJsonArray{}},
+                                           {u"remote"_s, QJsonArray{}},
+                                           {u"highlights"_s, QJsonArray{}}});
     return;
   }
   if (type == u"doc.close"_s) {
