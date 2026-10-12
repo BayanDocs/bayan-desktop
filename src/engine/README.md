@@ -3,7 +3,8 @@
 This directory connects the desktop shell to the BayanDocs engine. The shell talks to the engine only through the engine's C interface and the JSON protocol of [engine-protocol.md](https://github.com/BayanDocs/docs/blob/HEAD/specs/engine-protocol.md) (ADR-0012):
 
 - `engine.h` and `engine.cpp` hold `bayan::Engine`, a C++ wrapper over the C interface. It owns the engine instance, sends protocol messages, and moves the engine's replies and events from the engine's thread to the Qt main thread.
-- `stub/` holds a stub engine that implements the C interface with one fixed test page, and `stub/include/bayan_ffi.h`, a provisional hand-written copy of the C interface. They let the shell be built and tested before the real engine exists.
+- `protocol.h` and `protocol.cpp` hold the protocol's data as C++ values (pages, overlays, the accessibility tree, input events) and their strict parsers: every message from the engine is checked before the shell uses it.
+- `stub/` holds a stub engine that implements the C interface with one fixed test page, and `stub/include/bayan_ffi.h`, its hand-written copy of the C interface. They let the shell be built and tested without Rust.
 
 The CMake option `BAYAN_ENGINE` chooses the engine: `stub` (the default) compiles the stub into the app, and `sdk` links the real engine from bayan-core's C SDK (work package CORE-007), whose directory is given in `BAYAN_ENGINE_SDK_DIR`.
 
@@ -23,13 +24,16 @@ The library exports the functions declared in `bayan_ffi.h` with C linkage and t
 
 How the app is built against it (`src/engine/CMakeLists.txt`): the library becomes an imported shared library target (`IMPORTED_LOCATION` is the `.so`, `.dylib` or `.dll`; on Windows `IMPORTED_IMPLIB` is the import library), and every program that uses the engine links it dynamically:
 
-- **Linux and macOS:** CMake records the SDK's `lib` directory in the run path of the programs it builds, so `bayan-desktop`, `tst_engine` and `tst_documentsession` find the library where the SDK is unpacked, without copying it.
-- **Windows:** Windows looks for DLLs next to the program, so the build copies `bayan_ffi.dll` next to `bayan-desktop.exe`, `tst_engine.exe` and `tst_documentsession.exe` after linking them (`bayan_deploy_engine_runtime`). Only the engine's DLL is copied: Qt's DLLs stay in Qt's installation (on `PATH`), so that Qt keeps finding its plugins.
+- **Linux and macOS:** CMake records the SDK's `lib` directory in the run path of the programs it builds, so `bayan-desktop` and the tests find the library where the SDK is unpacked, without copying it.
+- **Windows:** Windows looks for DLLs next to the program, so the build copies `bayan_ffi.dll` next to `bayan-desktop.exe` and every test program after linking them (`bayan_deploy_engine_runtime`). Only the engine's DLL is copied: Qt's DLLs stay in Qt's installation (on `PATH`), so that Qt keeps finding its plugins.
 
 Packaging the library into installers (an app bundle's `Frameworks` folder, the Windows installer, Linux packages) belongs to the packaging work packages, not to this scaffold.
 
-## Testing the SDK path before the SDK exists
+## Testing against an SDK
 
-`scripts/test-engine-sdk.sh` builds the stub as a stand-in SDK with `tests/engine-sdk/` (a shared library in exactly the layout above, exporting only the functions of `bayan_ffi.h`), installs it into `build/stand-in-sdk/sdk`, and then builds bayan-desktop against it with `BAYAN_ENGINE=sdk` and runs the tests that use the engine (the `engine-sdk` workflow preset, or `engine-sdk-msvc` on Windows). CI runs it on Linux, macOS and Windows.
+`scripts/test-engine-sdk.sh` builds bayan-desktop against an SDK with `BAYAN_ENGINE=sdk` and runs the tests that use the engine (the `engine-sdk` workflow preset, or `engine-sdk-msvc` on Windows). CI runs it on Linux, macOS and Windows against two SDKs:
 
-To build against a real SDK, set `BAYAN_ENGINE_SDK_DIR` to its directory and run `cmake --workflow --preset engine-sdk` (on Windows, `engine-sdk-msvc` from a Visual Studio developer environment). Until DESK-002 adapts them, the engine tests and the smoke test check the stub's test page, so they will need updating when the real engine replaces the stub.
+- **A stand-in SDK:** without arguments, the script builds the stub with `tests/engine-sdk/` as a shared library in exactly the layout above, exporting only the functions of `bayan_ffi.h`, and installs it into `build/stand-in-sdk/sdk`. This checks how the app finds and links an SDK.
+- **The real engine:** `scripts/build-engine-sdk.sh` builds bayan-core's C SDK (CORE-007) from the commit pinned in `deps/bayan-core.json` into `build/bayan-core-sdk`, and `scripts/test-engine-sdk.sh --sdk build/bayan-core-sdk` tests against it. Its mock document has the editable line and the accessibility tree that the input-method and accessibility tests need; with the stub those tests skip, and with `BAYAN_REQUIRE_MOCK_DOCUMENT=1` (as in CI) they fail instead of skipping.
+
+To use any other SDK, such as one downloaded from bayan-core's CI, set `BAYAN_ENGINE_SDK_DIR` to its directory and run `cmake --workflow --preset engine-sdk` (on Windows, `engine-sdk-msvc` from a Visual Studio developer environment), or `scripts/test-engine-sdk.sh --sdk <directory>`.
