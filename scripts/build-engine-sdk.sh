@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Builds the bayan-core C SDK (CORE-007) from the commit pinned in deps/bayan-core.json, so that the app can be tested against the real engine
 # (BAYAN_ENGINE=sdk). Before bayan-core publishes releases, shells may build core from a pinned commit (ADR-0002 §4, Phase 0 only).
-#   1. fetches exactly that commit into build/bayan-core and checks that it got it (or uses the checkout given with --core, to try local
-#      changes to bayan-core; it then says when that checkout is not at the pinned commit);
+#   1. fetches exactly that commit into build/bayan-core, and checks that it got it and that the commit is on bayan-core's main branch (or
+#      uses the checkout given with --core, to try local changes to bayan-core; it then says when that checkout is not at the pinned commit);
 #   2. installs, with rustup, the Rust version that commit pins in its rust-toolchain.toml, in the minimal profile and without updating rustup;
 #   3. builds the SDK with `cargo xtask sdk`, which builds with bayan-core's Cargo.lock (--locked), into build/bayan-core-sdk, in the layout
 #      that src/engine/README.md describes.
@@ -58,7 +58,14 @@ if [[ -z $core_dir ]]; then
     echo "Fetched $(git -C "$core_dir" rev-parse HEAD) instead of the pinned $commit" >&2
     exit 1
   fi
-  echo "bayan-core $commit (pinned in deps/bayan-core.json)"
+  # GitHub serves every commit of a repository's forks through the repository's own URL too, so getting the commit does not show that it
+  # is the project's. The pin must name a commit on main: fetch main's history, commits only (no files), and check that it contains it.
+  git -C "$core_dir" fetch --quiet --no-tags --filter=tree:0 "$repository" "+refs/heads/main:refs/bayan-pin/main"
+  if ! git -C "$core_dir" merge-base --is-ancestor "$commit" refs/bayan-pin/main; then
+    echo "The pinned commit $commit is not on the main branch of $repository" >&2
+    exit 1
+  fi
+  echo "bayan-core $commit (pinned in deps/bayan-core.json, on main)"
 elif [[ $(git -C "$core_dir" rev-parse HEAD) != "$commit" ]]; then
   echo "Note: $core_dir is at $(git -C "$core_dir" rev-parse HEAD), not at the commit pinned in deps/bayan-core.json ($commit)." >&2
 fi
