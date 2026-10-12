@@ -192,6 +192,8 @@ private:
   void onOverlayChanged();
   void onAccessibilityChanged();
   void onTileRendered(const TileRenderer::Result &result);
+  // Starts a new tile thread for the session's engine, if there is a session, after stopping the old one.
+  void startRenderer();
   void updateContentSize();
   void updateDevicePixelRatio();
   // The view, the tiles or the pages changed: marks the tiles incomplete until the next frame and asks for that frame.
@@ -219,7 +221,8 @@ private:
   [[nodiscard]] TileRenderer::Job renderJob(const protocol::Page &page, const TileGrid &grid, const TileKey &key, Clock::time_point now);
   // The scales of the other zooms the cache holds tiles of, closest to scale first, for stand-ins.
   [[nodiscard]] std::vector<double> standInScales(double scale) const;
-  // Adds stretched tiles of other zooms that cover a missing tile; returns whether any was found.
+  // Adds stretched tiles of other zooms that cover a missing tile, from the closest zoom that has them (TileCache::standInsFor); returns
+  // whether any was found.
   bool addStandIns(const protocol::Page &page, const TileKey &missing, FramePlan &plan);
   void planOverlays(const ViewGeometry &view);
   // Reports whether the frame showed every tile it should, after the uploads of updatePaintNode.

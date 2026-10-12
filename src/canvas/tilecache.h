@@ -45,6 +45,9 @@ public:
   static constexpr int kMaxFailures = 3;
   // How many recent invalidations are remembered for tiles that are still being rendered.
   static constexpr std::size_t kRememberedInvalidations = 256;
+  // An invalidation of a page with more rectangles than this counts as one rectangle around all of them: the engine decides how many it
+  // sends, and every tile that arrives is checked against every remembered rectangle.
+  static constexpr std::size_t kMaxRectsPerInvalidation = 64;
   static constexpr qint64 kDefaultBudgetBytes = qint64{128} * 1024 * 1024;
   // Entries without an image that no frame used for this long are forgotten.
   static constexpr std::uint64_t kForgetEmptyAfterFrames = 600;
@@ -59,13 +62,28 @@ public:
   [[nodiscard]] bool needsRender(const TileKey &key) const;
   [[nodiscard]] const Entry *find(const TileKey &key) const;
 
+  // A tile of another zoom that can stand in for a missing one, and how close its zoom is: 0 for the closest.
+  struct StandIn {
+    TileKey key{};
+    std::size_t rank = 0;
+  };
+  // The tiles the cache has images of that cover part of an area of a page (in page coordinates), to stand in for a missing tile there.
+  // scales are the zooms to take them from (device pixels per device-independent pixel), closest first, and tileSize the tiles' side in
+  // device pixels. Tiles of the closest zoom come first; the next zoom adds its tiles only if the closer ones left part of the area
+  // uncovered, and so on until a zoom has every tile of the area.
+  [[nodiscard]] std::vector<StandIn> standInsFor(const protocol::Page &page, const protocol::BluRect &area,
+                                                 const std::vector<double> &scales, int tileSize) const;
+
   // A tile arrived from the tile thread; image is null if the engine refused it. Unknown keys (evicted meanwhile) are ignored. Returns
   // whether the cache kept the image.
   bool deliver(const TileKey &key, const QImage &image, qint64 renderedAfter);
   // The engine changed these rectangles of a page while handling request cause.
   void invalidate(int page, const std::vector<protocol::BluRect> &rects, qint64 cause);
-  // Forgets every tile, for example when the pages change.
+  // Forgets every tile, for example when the pages change. The changes remembered for tiles still being rendered stay.
   void clear();
+  // Forgets every tile and every change: for another engine, whose request numbers start again.
+  void reset();
+  void setBudget(qint64 bytes);
   // Drops tiles that frame did not use, least recently used first, until the images fit the budget.
   void evict(std::uint64_t frame);
 

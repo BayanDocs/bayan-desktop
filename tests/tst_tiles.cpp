@@ -67,6 +67,9 @@ private slots:
   void aTileRenderedWhileTheDocumentChangedIsDirty();
   void stopsAskingForRefusedTiles();
   void forgetsOldInvalidationsSafely();
+  void resetForgetsTheChangesOfTheOldEngine();
+  void remembersManyChangedRectanglesAsOne();
+  void standInsComeFromTheClosestZoomThatHasThem();
   void evictsTheLeastRecentlyUsedTilesOverBudget();
   void forgetsTilesThatNeverArrived();
 };
@@ -375,6 +378,96 @@ void TestTiles::forgetsOldInvalidationsSafely() {
   QVERIFY(cache.find(key)->dirty);
   QVERIFY(cache.deliver(key, image(QSize(304, 512)), 1000));
   QVERIFY(!cache.find(key)->dirty);
+}
+
+void TestTiles::resetForgetsTheChangesOfTheOldEngine() {
+  TileCache cache;
+  const TileGrid grid(1.0, 512);
+  const TileKey key{.page = 0, .scale = 1.0, .column = 0, .row = 0};
+  // Changes caused by requests up to 500 of one engine; clear() keeps them for tiles still being rendered.
+  cache.invalidate(0, {grid.tileRect(kLetter, 0, 0)}, 500);
+  cache.clear();
+  cache.want(key, grid.tileRect(kLetter, 0, 0), QSize(512, 512), 1);
+  QVERIFY(cache.deliver(key, image(QSize(512, 512)), 3));
+  QVERIFY(cache.find(key)->dirty);
+  // Another engine counts its requests from 1 again: after reset(), its tile rendered after request 3 is fresh.
+  cache.reset();
+  QCOMPARE(cache.size(), std::size_t{0});
+  cache.want(key, grid.tileRect(kLetter, 0, 0), QSize(512, 512), 1);
+  QVERIFY(cache.deliver(key, image(QSize(512, 512)), 3));
+  QVERIFY(!cache.find(key)->dirty);
+}
+
+void TestTiles::remembersManyChangedRectanglesAsOne() {
+  // Tiles of 256 pixels: four columns. Rectangles changed in columns 0 and 2 do not touch column 1, unless there are so many that the
+  // cache remembers the rectangle around them, which does.
+  const TileGrid grid(1.0, 256);
+  const TileKey key{.page = 0, .scale = 1.0, .column = 1, .row = 0};
+  const QSize size(256, 256);
+  const protocol::BluRect left{.x = 0, .y = 0, .width = 100, .height = 100};
+  const protocol::BluRect right{.x = grid.tileRect(kLetter, 2, 0).x, .y = 0, .width = 100, .height = 100};
+  std::vector<protocol::BluRect> many(TileCache::kMaxRectsPerInvalidation, left);
+  many.push_back(right);
+
+  TileCache cache;
+  cache.want(key, grid.tileRect(kLetter, 1, 0), size, 1);
+  QVERIFY(cache.deliver(key, image(size), 5));
+  cache.invalidate(0, {left, right}, 6);
+  QVERIFY(!cache.find(key)->dirty);
+  cache.invalidate(0, many, 7);
+  QVERIFY(cache.find(key)->dirty);
+  // The tiles still being rendered are judged by the same rectangle.
+  TileCache rendering;
+  rendering.want(key, grid.tileRect(kLetter, 1, 0), size, 1);
+  rendering.invalidate(0, {left, right}, 6);
+  QVERIFY(rendering.deliver(key, image(size), 5));
+  QVERIFY(!rendering.find(key)->dirty);
+  rendering.invalidate(0, many, 7);
+  QVERIFY(rendering.deliver(key, image(size), 6));
+  QVERIFY(rendering.find(key)->dirty);
+}
+
+void TestTiles::standInsComeFromTheClosestZoomThatHasThem() {
+  // The missing tile: the top-left 512 × 512 device pixels of the page at 100 %. At 125 % and at 150 % that part of the page lies on two
+  // columns and two rows of tiles.
+  const protocol::BluRect area = TileGrid(1.0, 512).tileRect(kLetter, 0, 0);
+  const TileGrid closer(1.25, 512);
+  const TileGrid farther(1.5, 512);
+  const std::vector<double> scales{closer.scale(), farther.scale()};
+  const auto add = [](TileCache &cache, const TileGrid &grid, int column, int row) {
+    const DeviceRect pixels = grid.tilePixels(kLetter, column, row);
+    const QSize size(static_cast<int>(pixels.width), static_cast<int>(pixels.height));
+    const TileKey key{.page = 0, .scale = grid.scale(), .column = column, .row = row};
+    cache.want(key, grid.tileRect(kLetter, column, row), size, 1);
+    return cache.deliver(key, image(size), 1);
+  };
+  const auto ranks = [](const std::vector<TileCache::StandIn> &standIns) {
+    std::vector<std::size_t> result;
+    result.reserve(standIns.size());
+    for (const TileCache::StandIn &standIn : standIns) {
+      result.push_back(standIn.rank);
+    }
+    return result;
+  };
+
+  TileCache cache;
+  QVERIFY(cache.standInsFor(kLetter, area, scales, 512).empty());
+  // The farther zoom has all four tiles, the closer one only the top-left one: both stand in, the closer one first.
+  for (int column = 0; column < 2; ++column) {
+    for (int row = 0; row < 2; ++row) {
+      QVERIFY(add(cache, farther, column, row));
+    }
+  }
+  QVERIFY(add(cache, closer, 0, 0));
+  std::vector<TileCache::StandIn> standIns = cache.standInsFor(kLetter, area, scales, 512);
+  QVERIFY(ranks(standIns) == (std::vector<std::size_t>{0, 1, 1, 1, 1}));
+  QVERIFY(standIns.front().key == (TileKey{.page = 0, .scale = closer.scale(), .column = 0, .row = 0}));
+  // Once the closer zoom has all four, the farther one is not needed.
+  QVERIFY(add(cache, closer, 1, 0));
+  QVERIFY(add(cache, closer, 0, 1));
+  QVERIFY(add(cache, closer, 1, 1));
+  standIns = cache.standInsFor(kLetter, area, scales, 512);
+  QVERIFY(ranks(standIns) == (std::vector<std::size_t>{0, 0, 0, 0}));
 }
 
 void TestTiles::evictsTheLeastRecentlyUsedTilesOverBudget() {

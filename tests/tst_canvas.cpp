@@ -5,6 +5,7 @@
 // accessibility interfaces directly, as the platform bridges would.
 
 #include "accessibletext.h"
+#include "canvasnode.h"
 #include "documentcanvas.h"
 #include "documentsession.h"
 #include "engine.h"
@@ -196,6 +197,8 @@ private slots:
   void scrollingShowsTheEnginesPixelsAndStopsAtTheEnds();
   void zoomStretchesTilesUntilTheNewOnesArrive();
   void zoomKeepsThePointUnderThePointer();
+  void standInsAreDrawnInTheOrderGiven();
+  void aNewSessionForgetsTheOldEnginesChanges();
   void keysAndTheWheelMoveTheView();
   void tabLeavesTheCanvas();
   void stubHasNoEditableText();
@@ -278,6 +281,75 @@ void TestCanvas::zoomKeepsThePointUnderThePointer() {
   // Within a device pixel, which at zoom 1.5 is 12,700 BLU.
   QVERIFY2(qAbs(before.x() - after.x()) < 12'700 && qAbs(before.y() - after.y()) < 12'700,
            qPrintable(u"(%1, %2) became (%3, %4)"_s.arg(before.x()).arg(before.y()).arg(after.x()).arg(after.y())));
+}
+
+void TestCanvas::standInsAreDrawnInTheOrderGiven() {
+  // The canvas hands the scene graph its stand-ins from the farthest zoom to the closest, so that the sharpest are drawn on top. The node
+  // must keep that order, whatever order the tiles first appeared in.
+  const auto fixture = openDocument();
+  QVERIFY(fixture);
+  QQuickWindow &window = *fixture->window;
+  QImage image(16, 16, QImage::Format_RGBA8888_Premultiplied);
+  image.fill(Qt::white);
+  const auto standIn = [&image](double scale) {
+    return bayan::CanvasTile{.key = {.page = 0, .scale = scale, .column = 0, .row = 0},
+                             .rect = QRectF(0, 0, 16, 16),
+                             .image = image,
+                             .version = 1,
+                             .current = false,
+                             .exact = false};
+  };
+  const bayan::CanvasTile blurry = standIn(1.0);
+  const bayan::CanvasTile sharp = standIn(1.25);
+  std::vector<std::vector<bayan::TileKey>> orders;
+  // Nodes and textures belong to the scene graph: make them while it synchronizes with the GUI thread, as updatePaintNode does.
+  const QMetaObject::Connection connection = connect(
+      &window, &QQuickWindow::beforeSynchronizing, this,
+      [&window, &orders, &blurry, &sharp] {
+        if (!orders.empty()) {
+          return;
+        }
+        bayan::CanvasNode node;
+        (void)node.setTiles(window, {sharp, blurry}, 8);
+        orders.push_back(node.standInOrder());
+        (void)node.setTiles(window, {blurry, sharp}, 8);
+        orders.push_back(node.standInOrder());
+        (void)node.setTiles(window, {blurry, sharp}, 8);
+        orders.push_back(node.standInOrder());
+      },
+      Qt::DirectConnection);
+  window.update();
+  QTRY_COMPARE(orders.size(), std::size_t{3});
+  disconnect(connection);
+  QVERIFY(orders.at(0) == (std::vector{sharp.key, blurry.key}));
+  QVERIFY(orders.at(1) == (std::vector{blurry.key, sharp.key}));
+  QVERIFY(orders.at(2) == orders.at(1));
+}
+
+void TestCanvas::aNewSessionForgetsTheOldEnginesChanges() {
+  const auto fixture = openDocument();
+  QVERIFY(fixture);
+  bayan::DocumentCanvas &canvas = *fixture->canvas;
+  // Views of other zooms: the engine changes every page while handling requests that a new engine will not reach for a while.
+  int invalidations = 0;
+  const QMetaObject::Connection counter =
+      connect(fixture->session.get(), &bayan::DocumentSession::invalidated, this, [&invalidations] { ++invalidations; });
+  for (int step = 1; step <= 20; ++step) {
+    fixture->session->setView({.viewport = QRectF(0, 0, 900, 700), .zoom = 1.0 + (step * 0.01), .deviceScale = 1.0});
+  }
+  // At least those 20: the canvas may send a view of its own meanwhile.
+  QTRY_VERIFY(invalidations >= 20);
+  disconnect(counter);
+  QTRY_VERIFY(canvas.tilesComplete());
+  // Another document in the same canvas, from a new engine that counts its requests from 1 again.
+  const auto engine = bayan::Engine::create();
+  QVERIFY(engine);
+  bayan::DocumentSession session(*engine);
+  canvas.setSession(&session);
+  session.start();
+  QTRY_VERIFY(session.status() == bayan::DocumentSession::Status::Ready);
+  QTRY_VERIFY(canvas.tilesComplete());
+  canvas.setSession(nullptr);
 }
 
 void TestCanvas::keysAndTheWheelMoveTheView() {

@@ -61,8 +61,11 @@ public:
 
   // A soft shadow and a neutral placeholder under each page, visible until the page's tiles arrive.
   void setPages(QQuickWindow &window, const std::vector<QRectF> &pages, const QColor &shadow, const QColor &placeholder);
-  // Shows exactly these tiles, uploading at most maxUploads new images.
+  // Shows exactly these tiles, uploading at most maxUploads new images. Stand-ins are drawn in the order given, each above the ones before
+  // it; tiles of the current zoom do not overlap, and are drawn above all stand-ins.
   [[nodiscard]] TileUpdate setTiles(QQuickWindow &window, const std::vector<CanvasTile> &tiles, int maxUploads);
+  // The stand-ins shown, from the one drawn lowest to the one on top.
+  [[nodiscard]] std::vector<TileKey> standInOrder() const;
   // The selection's rectangles, and the caret on top of them.
   void setOverlays(QQuickWindow &window, const std::vector<QRectF> &selection, const std::optional<QRectF> &caret,
                    const QColor &selectionColor, const QColor &caretColor);
@@ -77,6 +80,8 @@ private:
   bool placeTile(QQuickWindow &window, const CanvasTile &tile, int maxUploads, TileUpdate &update);
   // Deletes the nodes of tiles that are no longer shown.
   void removeTilesExcept(const std::set<TileKey> &shown);
+  // Puts the stand-ins' nodes in the order of tiles, moving only those out of place.
+  void orderStandIns(const std::vector<CanvasTile> &tiles);
 
   // Owned by this node: QSGNode deletes the children flagged OwnedByParent, the default.
   QSGNode *pages_ = new QSGTransformNode;    // NOLINT(cppcoreguidelines-owning-memory)

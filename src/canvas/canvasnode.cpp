@@ -5,6 +5,8 @@
 #include <QtQuick/QSGRectangleNode>
 #include <QtQuick/QSGTexture>
 
+#include <algorithm>
+
 namespace bayan {
 namespace {
 
@@ -66,7 +68,19 @@ CanvasNode::TileUpdate CanvasNode::setTiles(QQuickWindow &window, const std::vec
     }
   }
   removeTilesExcept(shown);
+  orderStandIns(tiles);
   return update;
+}
+
+std::vector<TileKey> CanvasNode::standInOrder() const {
+  std::vector<TileKey> order;
+  for (const QSGNode *child = standIns_->firstChild(); child != nullptr; child = child->nextSibling()) {
+    const auto slot = std::ranges::find_if(slots_, [child](const auto &item) { return item.second.node == child; });
+    if (slot != slots_.end()) {
+      order.push_back(slot->first);
+    }
+  }
+  return order;
 }
 
 bool CanvasNode::placeTile(QQuickWindow &window, const CanvasTile &tile, int maxUploads, TileUpdate &update) {
@@ -111,6 +125,28 @@ void CanvasNode::removeTilesExcept(const std::set<TileKey> &shown) {
     }
     delete slot->second.node; // NOLINT(cppcoreguidelines-owning-memory): removed from its parent; deleting it also deletes its texture.
     slot = slots_.erase(slot);
+  }
+}
+
+void CanvasNode::orderStandIns(const std::vector<CanvasTile> &tiles) {
+  // After removeTilesExcept, the layer holds exactly the stand-ins placed this frame. Walk them in the order given; a node whose previous
+  // sibling is not the one before it in that order is moved there. Nothing moves while the order stays the same.
+  QSGNode *previous = nullptr;
+  for (const CanvasTile &tile : tiles) {
+    const auto slot = tile.current ? slots_.end() : slots_.find(tile.key);
+    if (slot == slots_.end() || slot->second.node == previous) {
+      continue;
+    }
+    QSGNode *node = slot->second.node;
+    if (node->previousSibling() != previous) {
+      standIns_->removeChildNode(node);
+      if (previous == nullptr) {
+        standIns_->prependChildNode(node);
+      } else {
+        standIns_->insertChildNodeAfter(node, previous);
+      }
+    }
+    previous = node;
   }
 }
 

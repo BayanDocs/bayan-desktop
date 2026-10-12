@@ -131,7 +131,8 @@ void DocumentCanvas::setSession(DocumentSession *session) {
     disconnect(session_, nullptr, this, nullptr);
   }
   renderer_.reset();
-  cache_.clear();
+  // The tiles, and the changes remembered for them, belong to the old session's engine; another engine numbers its requests from 1 again.
+  cache_.reset();
   wantedSince_.clear();
   visibleSince_.clear();
   tilePages_.clear();
@@ -139,8 +140,7 @@ void DocumentCanvas::setSession(DocumentSession *session) {
   compositionContext_.reset();
   session_ = session;
   if (session_ != nullptr) {
-    renderer_ = std::make_unique<TileRenderer>(session_->engine());
-    connect(renderer_.get(), &TileRenderer::tileRendered, this, &DocumentCanvas::onTileRendered);
+    startRenderer();
     connect(session_, &DocumentSession::pagesChanged, this, &DocumentCanvas::onPagesChanged);
     connect(session_, &DocumentSession::invalidated, this, &DocumentCanvas::onInvalidated);
     connect(session_, &DocumentSession::overlayChanged, this, &DocumentCanvas::onOverlayChanged);
@@ -149,7 +149,7 @@ void DocumentCanvas::setSession(DocumentSession *session) {
     // A session destroyed first takes its engine's use with it: stop the tile thread at once (session_ is already null by then).
     connect(session_, &QObject::destroyed, this, [this] {
       renderer_.reset();
-      cache_.clear();
+      cache_.reset();
       wantedSince_.clear();
       visibleSince_.clear();
       viewChanged();
@@ -160,6 +160,15 @@ void DocumentCanvas::setSession(DocumentSession *session) {
   onPagesChanged();
   onAccessibilityChanged();
   emit sessionChanged();
+}
+
+void DocumentCanvas::startRenderer() {
+  // Destroying the old tile thread first also drops the tiles it rendered that have not reached onTileRendered yet.
+  renderer_.reset();
+  if (session_ != nullptr) {
+    renderer_ = std::make_unique<TileRenderer>(session_->engine());
+    connect(renderer_.get(), &TileRenderer::tileRendered, this, &DocumentCanvas::onTileRendered);
+  }
 }
 
 ViewGeometry DocumentCanvas::geometry() const {
@@ -269,7 +278,9 @@ void DocumentCanvas::setTileSize(int devicePixels) {
   const int size = std::clamp(devicePixels, TileGrid::kMinimumTileSize, TileGrid::kMaximumTileSize);
   if (size != tileSize_) {
     tileSize_ = size;
-    // Tiles of another size do not fit the new grid.
+    // Tiles of another size do not fit the new grid. A tile of the old grid that is still being rendered may have the key and the size of a
+    // new tile while it shows another part of the page: a new tile thread never delivers it.
+    startRenderer();
     cache_.clear();
     wantedSince_.clear();
     visibleSince_.clear();
@@ -278,10 +289,9 @@ void DocumentCanvas::setTileSize(int devicePixels) {
 }
 
 void DocumentCanvas::setTileCacheBudget(qint64 bytes) {
-  cache_ = TileCache(bytes);
-  wantedSince_.clear();
-  visibleSince_.clear();
-  viewChanged();
+  // Takes effect with the next frame's eviction; the tiles and the changes remembered for those being rendered stay.
+  cache_.setBudget(bytes);
+  polish();
 }
 
 std::optional<QRectF> DocumentCanvas::itemRectFor(int page, const protocol::BluRect &rect) const {
@@ -506,7 +516,8 @@ struct DocumentCanvas::FramePlan {
   Clock::time_point now;
   std::vector<TileRenderer::Job> visibleJobs;
   std::vector<TileRenderer::Job> prefetchJobs;
-  std::vector<TileKey> standIns;
+  // Stretched tiles of other zooms, with the rank of their zoom (0: the closest).
+  std::vector<std::pair<std::size_t, CanvasTile>> standIns;
   // The visible tiles of the current grid.
   std::vector<TileKey> visible;
   // Whether every visible tile is shown, fresh, at the current zoom; and whether stand-ins or holes were needed.
@@ -545,6 +556,11 @@ void DocumentCanvas::updatePolish() {
                  .holes = false};
   for (const protocol::Page &page : session_->pages()) {
     planPage(page, plan);
+  }
+  // Stand-ins of different zooms overlap. Drawn from the farthest zoom to the closest, the sharpest end up on top.
+  std::ranges::stable_sort(plan.standIns, std::ranges::greater{}, [](const auto &standIn) { return standIn.first; });
+  for (auto &standIn : plan.standIns) {
+    displayTiles_.push_back(std::move(standIn.second));
   }
   // Visible tiles first, then the ones around them; within each, the order of the pages and rows, top to bottom.
   plan.visibleJobs.insert(plan.visibleJobs.end(), std::make_move_iterator(plan.prefetchJobs.begin()),
@@ -641,36 +657,24 @@ TileRenderer::Job DocumentCanvas::renderJob(const protocol::Page &page, const Ti
 }
 
 bool DocumentCanvas::addStandIns(const protocol::Page &page, const TileKey &missing, FramePlan &plan) {
-  // The missing tile's part of the page, in each other zoom's grid.
-  const protocol::BluRect area = plan.grid.tileRect(page, missing.column, missing.row);
-  bool found = false;
-  for (const double scale : plan.otherScales) {
-    const TileGrid other(scale, tileSize_);
-    const double perBlu = scale / static_cast<double>(protocol::kBluPerDip);
-    const auto left = static_cast<qint64>(std::floor(static_cast<double>(area.x) * perBlu));
-    const auto top = static_cast<qint64>(std::floor(static_cast<double>(area.y) * perBlu));
-    const auto right = static_cast<qint64>(std::ceil(static_cast<double>(area.right()) * perBlu));
-    const auto bottom = static_cast<qint64>(std::ceil(static_cast<double>(area.bottom()) * perBlu));
-    for (const TileKey &key : other.tilesIntersecting(page, {.x = left, .y = top, .width = right - left, .height = bottom - top})) {
-      const TileCache::Entry *entry = cache_.find(key);
-      if (entry == nullptr || entry->image.isNull()) {
-        continue;
-      }
-      found = true;
-      if (std::ranges::find(plan.standIns, key) != plan.standIns.end()) {
-        continue;
-      }
-      plan.standIns.push_back(key);
-      cache_.touch(key, frame_);
-      displayTiles_.push_back({.key = key,
-                               .rect = plan.view.tileItemRect(page, other, key.column, key.row),
-                               .image = entry->image,
-                               .version = entry->version,
-                               .current = false,
-                               .exact = false});
+  const std::vector<TileCache::StandIn> standIns =
+      cache_.standInsFor(page, plan.grid.tileRect(page, missing.column, missing.row), plan.otherScales, tileSize_);
+  for (const TileCache::StandIn &standIn : standIns) {
+    const TileKey &key = standIn.key;
+    const TileCache::Entry *entry = cache_.find(key);
+    if (entry == nullptr || std::ranges::any_of(plan.standIns, [&key](const auto &added) { return added.second.key == key; })) {
+      continue;
     }
+    cache_.touch(key, frame_);
+    plan.standIns.emplace_back(standIn.rank,
+                               CanvasTile{.key = key,
+                                          .rect = plan.view.tileItemRect(page, TileGrid(key.scale, tileSize_), key.column, key.row),
+                                          .image = entry->image,
+                                          .version = entry->version,
+                                          .current = false,
+                                          .exact = false});
   }
-  return found;
+  return !standIns.empty();
 }
 
 void DocumentCanvas::planOverlays(const ViewGeometry &view) {
