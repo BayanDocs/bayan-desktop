@@ -769,6 +769,7 @@ void TestCanvas::accessibilityExposesTheDocumentText() {
   QCOMPARE(accessible->text(QAccessible::Name), u"BayanDocs mock document"_s);
   const QAccessible::State state = accessible->state();
   QVERIFY(state.focusable && state.focused && state.editable && state.multiLine);
+  QVERIFY(!state.selectableText); // Protocol v0 has no selection to offer.
   QVERIFY(accessible->parent() != nullptr);
   QAccessibleTextInterface *text = accessible->textInterface();
   QVERIFY(text != nullptr && accessible->editableTextInterface() != nullptr);
@@ -838,6 +839,12 @@ void TestCanvas::accessibleEditingGoesThroughTheEngine() {
   editable->replaceText(caret + 5, caret + 8, u"ion"_s);
   QTRY_COMPARE(editableText(*fixture->session), u"dictaion"_s);
   editable->deleteText(caret + 5, caret + 8);
+  QTRY_COMPARE(editableText(*fixture->session), u"dicta"_s);
+  // Replacing an empty range at the caret inserts.
+  QTRY_COMPARE(text->cursorPosition(), caret + 5);
+  editable->replaceText(caret + 5, caret + 5, u"te"_s);
+  QTRY_COMPARE(editableText(*fixture->session), u"dictate"_s);
+  editable->deleteText(caret + 5, caret + 7);
   QTRY_COMPARE(editableText(*fixture->session), u"dicta"_s);
   // Text elsewhere (the heading) cannot be edited, and the engine is not asked.
   editable->deleteText(0, 4);

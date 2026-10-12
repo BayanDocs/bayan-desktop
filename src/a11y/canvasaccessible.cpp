@@ -127,7 +127,7 @@ QAccessible::State CanvasAccessible::state() const {
   state.focused = canvas->hasActiveFocus();
   state.editable = true;
   state.multiLine = true;
-  state.selectableText = true;
+  // Not selectableText: protocol v0 has no selection to offer (the DESK-002 report, section 6).
   state.invisible = !canvas->isVisible() || canvas->window() == nullptr || !canvas->window()->isVisible();
   return state;
 }
@@ -254,6 +254,11 @@ void CanvasAccessible::EditableText::insertText(int offset, const QString &text)
 }
 
 void CanvasAccessible::EditableText::replaceText(int startOffset, int endOffset, const QString &text) {
+  // Replacing an empty range inserts.
+  if (startOffset == endOffset) {
+    insertText(startOffset, text);
+    return;
+  }
   if (!owner_.deletableAtCaret(startOffset, endOffset)) {
     return;
   }
