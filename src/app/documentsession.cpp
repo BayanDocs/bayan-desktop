@@ -48,8 +48,9 @@ void DocumentSession::start() {
 }
 
 qint64 DocumentSession::currentCause() const {
-  // The engine answers every request before it sends the events that handling it caused, and every message the session sends is a
-  // request. So an event belongs to the request whose reply arrived last. Before any reply, assume the worst: the last request posted.
+  // The v0 engine answers every request before it sends the events that handling it caused (see the file comment of documentsession.h: the
+  // protocol states it only for view.set), and every message the session sends is a request. So an event belongs to the request whose reply
+  // arrived last. Before any reply, assume the worst: the last request posted.
   return lastReply_ > 0 ? lastReply_ : engine_.lastPostedRequest();
 }
 

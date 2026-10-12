@@ -3,8 +3,10 @@
 // (caret, selection), the regions to draw again and the accessibility tree. It also relays the user's input as protocol messages.
 //
 // It contains no document logic: the engine decides everything, the session only relays (ADR-0013 §3). Every message it sends is a request
-// with an identifier, because the engine answers each request before sending the events that handling it caused (engine protocol §4, §8).
-// The session therefore knows which request caused each event, and tells the canvas, which uses it to tell fresh tiles from stale ones.
+// with an identifier, because the v0 engine answers each request before sending the events that handling it caused. The protocol states
+// that order only for view.set (engine protocol §6); for the input messages it is how bayan-engine behaves at the pinned commit (its
+// engine.rs replies before it reports the changed line), and the DESK-002 report proposes making it normative. The session therefore knows
+// which request caused each event, and tells the canvas, which uses it to tell fresh tiles from stale ones.
 
 #pragma once
 

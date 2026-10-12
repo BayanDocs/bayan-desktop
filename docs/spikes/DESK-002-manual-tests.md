@@ -1,6 +1,6 @@
 # DESK-002 manual tests: input methods, screen readers and frame times
 
-These are the tests of [DESK-002](https://github.com/BayanDocs/docs/blob/HEAD/workpackages/phase-0/DESK-002-spike-qt-canvas.md) that need a person and real computers: acceptance criteria AC-1 (frame times on the reference laptops), AC-2 (Japanese, Chinese and Korean input methods on Windows and macOS) and AC-3 (screen readers on Windows and macOS, and Linux if possible). Everything else is tested automatically; the [report](DESK-002-report.md) has the results.
+These are the tests of [DESK-002](https://github.com/BayanDocs/docs/blob/HEAD/workpackages/phase-0/DESK-002-spike-qt-canvas.md) that need a person and real computers: acceptance criteria AC-1 (frame times on the reference laptops, and on Linux at high DPI), AC-2 (Japanese, Chinese and Korean input methods on Windows and macOS) and AC-3 (screen readers on Windows and macOS, and Orca on Linux). ADR-0013's validation gate asks for smooth scrolling and zooming at high DPI on all three platforms, and AC-3 for the Linux result, whatever it is, so the Linux runs of tests 1 and 3 are required; the Linux input methods are tested if feasible, as the brief says. Everything else is tested automatically; the [report](DESK-002-report.md) has the results.
 
 Each test lists what to do and what should happen. Fill in the result tables at the end (or paste them into the pull request), and attach the screenshots, short screen recordings and benchmark files. "Passed", "Failed" or "Partly" with a sentence is enough; when something differs from the expected result, describe what you saw.
 
@@ -67,23 +67,39 @@ The reference laptops are the plan's reference hardware ([requirements](https://
    ```
 5. Start it from the same prompt: `build\engine-sdk-msvc\src\bayan-desktop.exe`.
 
-### Linux (optional)
+### Linux (Ubuntu 24.04)
 
-As in the README, then `scripts/build-engine-sdk.sh` (or the artifact `bayan-core-sdk-x86_64-unknown-linux-gnu`, SHA-256 `a5153f7fe6b1b444067cae4cab54f42fd933e95522f02367fd42598c626ced05`) and `BAYAN_ENGINE_SDK_DIR="$PWD/build/bayan-core-sdk" cmake --workflow --preset engine-sdk`. Qt's X11 support needs the packages `libxcb-cursor0`, `libxcb-icccm4` and `libxcb-keysyms1`.
+Any computer with a graphics card will do; the simplest is the Windows reference laptop running Ubuntu 24.04 LTS from a USB stick ("Try Ubuntu" is enough, though a few gigabytes of free space on the stick or an installation keeps the build between restarts) or from a second partition. Use the laptop's own screen.
+
+1. On the login screen, choose the **Ubuntu on Xorg** session (the gear icon at the bottom right). The Qt that `scripts/dev-setup.sh` installs has no Wayland plugin yet, so on Ubuntu's default Wayland session the app would run through XWayland, which GNOME 46 enlarges after drawing instead of letting the app draw sharp pixels at high DPI.
+2. In a terminal, install the compiler, the packages Qt needs and Orca's speech:
+   ```sh
+   sudo apt update && sudo apt install build-essential git python3-venv libgl-dev libegl-dev libvulkan-dev libxkbcommon-dev libfontconfig-dev libdbus-1-dev libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 orca
+   ```
+3. Get the code and the pinned tools, and the engine (`scripts/build-engine-sdk.sh` after installing rustup from [rustup.rs](https://rustup.rs), or the artifact `bayan-core-sdk-x86_64-unknown-linux-gnu` from [the same CI run](https://github.com/BayanDocs/bayan-core/actions/runs/38177097534), SHA-256 `a5153f7fe6b1b444067cae4cab54f42fd933e95522f02367fd42598c626ced05`, checked and unpacked as on macOS with `sha256sum` instead of `shasum -a 256`):
+   ```sh
+   git clone https://github.com/BayanDocs/bayan-desktop.git && cd bayan-desktop
+   git checkout claude/desk-002-qt-canvas
+   scripts/dev-setup.sh
+   . ~/.local/share/bayandocs/desktop-tools/env.sh
+   ```
+4. Build the app against it and run its tests (all must pass): `BAYAN_ENGINE_SDK_DIR="$PWD/build/bayan-core-sdk" cmake --workflow --preset engine-sdk`.
+5. Start it: `build/engine-sdk/src/bayan-desktop`.
 
 ## Test 1: smoothness and frame times (AC-1)
 
-1. Note the screen's refresh rate (macOS: System Settings → Displays; Windows: Settings → System → Display → Advanced display) and its scaling (Windows: Settings → System → Display → Scale).
+1. Note the screen's refresh rate (macOS: System Settings → Displays; Windows: Settings → System → Display → Advanced display; Linux: Settings → Displays) and its scaling (Windows: Settings → System → Display → Scale; Linux: Settings → Displays → Scale).
 2. Run the benchmark. The window scrolls, zooms and types by itself for about 20 seconds, closes, and prints three lines. Don't touch the computer meanwhile.
    - macOS: `build/engine-sdk/src/bayan-desktop.app/Contents/MacOS/bayan-desktop --benchmark ~/desk002-macos.json`
    - Windows: `build\engine-sdk-msvc\src\bayan-desktop.exe --benchmark %USERPROFILE%\desk002-windows-100.json`
-3. On Windows, repeat step 2 at 125 % and 150 % scaling (change the scale, then run again with a new file name).
+   - Linux: `build/engine-sdk/src/bayan-desktop --benchmark ~/desk002-linux-100.json`
+3. On Windows, repeat step 2 at 125 % and 150 % scaling (change the scale, then run again with a new file name). On Linux, repeat it at 200 % (Settings → Displays → Scale, then log out and in again), and at 125 % too if Settings offers fractional scaling; in each JSON file, `screen.device_pixel_ratio` must show the scale (2 at 200 %), or the run did not test high DPI.
 4. By hand, in the app:
    - Scroll with two fingers on the trackpad, with the mouse wheel, by dragging the scroll bar, and with Page Down and Page Up. Expected: smooth, no stutter, no blank or grey areas on the pages for more than a moment, no lines between tiles.
    - Zoom with a pinch, with Control and the mouse wheel (Command on macOS), and with Control+plus and Control+minus (Command on macOS); Control+0 (Command+0) goes back to 100 %. Expected: while zooming, the page stretches smoothly (slightly blurry); a moment after you stop, it becomes sharp again. The point under the pointer stays under the pointer.
    - Move the window to a second screen with another scaling, if you have one. Expected: sharp text on both.
 
-**Passes when:** in the printed lines, the p95 interval while scrolling and while zooming is at most 1.5 times the refresh interval (25 ms at 60 Hz, 12.5 ms at 120 Hz), "late" is at most 1 % of the frames, and nothing looked wrong by hand. Attach the JSON files.
+**Passes when:** in every benchmark run on each of the three systems (100 % and the high-DPI settings of step 3; the Mac's Retina screen is high DPI already), the p95 interval while scrolling and while zooming in the printed lines is at most 1.5 times the refresh interval (25 ms at 60 Hz, 12.5 ms at 120 Hz), "late" is at most 1 % of the frames, and nothing looked wrong by hand. Attach the JSON files.
 
 ## Test 2: input methods (AC-2)
 
@@ -119,11 +135,19 @@ Click into the yellow editable line first; a thin caret blinks there. For each i
 | b | Type `rmf` | The first syllable becomes dark (한) and a new composing one appears (글) |
 | c | Press Space | 2 dark bars (한글) followed by a space |
 
+**Ending a composition early** (Japanese, on Windows and on macOS). Each step starts with typing `nihon`, so that three blue underlined bars are composing; the composition must then be committed exactly once.
+
+| Step | Do | Expected |
+|---|---|---|
+| a | Click elsewhere in the editable line, then type `ka` | The 3 bars turn dark, once (not 6); `ka` starts a new composition at the click with one blue bar, without the earlier bars in it |
+| b | Press Tab, or click the ribbon | The 3 bars turn dark, once; the focus leaves the page. Click back into the line: nothing more was added |
+| c | Switch to another app (Alt+Tab, or Command+Tab on macOS) and back | The 3 bars turn dark, once; typing afterwards starts a fresh composition |
+
 **macOS only:** switch to ABC (or U.S.), hold `e` until the accent menu appears, press 2. Expected: the bar for "e" is replaced by one bar (é), not two. Then press Control+Command+Space and pick an emoji. Expected: one more bar.
 
-**Linux (optional):** IBus with Mozc, Pinyin and Hangul, or Fcitx 5 with the same; the same steps.
+**Linux, if feasible:** IBus with Mozc, Pinyin and Hangul, or Fcitx 5 with the same; the same steps.
 
-**Passes when** composition appears in the editable line as blue underlined bars, committing turns it into the right number of dark bars, the candidate window opens next to the caret, and nothing is lost or doubled, for all three languages on Windows and on macOS.
+**Passes when** composition appears in the editable line as blue underlined bars, committing turns it into the right number of dark bars, the candidate window opens next to the caret, and nothing is lost or doubled, also when the composition ends early, for all three languages on Windows and on macOS.
 
 ## Test 3: screen readers (AC-3)
 
@@ -149,25 +173,32 @@ The document is presented as one multi-line text: every heading, paragraph, list
 | d | Type `hello`, then Left Arrow three times | Typing is echoed; the characters the caret passes are read |
 | e | Type in Japanese as in Test 2 and press VO+L | VoiceOver reads 日本 |
 
-**Linux: Orca (optional).** Start Orca (Super+Alt+S on GNOME), then the app, and click on the page. Use Orca's say-all command (Numpad Plus; laptop layout: Orca+Semicolon) and type a few characters. Report what it reads and whether it echoes typing.
+**Linux: Orca** (required: AC-3 asks for the Linux result, whatever it is).
 
-**Passes when** the screen reader reads the mock document's text on Windows and on macOS, echoes typing, follows the caret, and reads committed East Asian text. A short screen recording with sound for each platform is the best evidence.
+| Step | Do | Expected |
+|---|---|---|
+| a | Start Orca (Super+Alt+S), then the app; click on the page | Orca announces the document ("BayanDocs mock document", a multi-line text) |
+| b | Use Orca's say-all command (Numpad Plus; laptop layout: Orca+Semicolon, where Orca is Caps Lock) | Orca reads the document's text; note where it starts and where it stops |
+| c | Type `hello`, then Left Arrow three times | Typing is echoed; the characters the caret passes are read |
+
+**Passes when** the screen reader reads the mock document's text on Windows and on macOS, echoes typing, follows the caret, and reads committed East Asian text; on Linux, Orca's result is recorded either way. A short screen recording with sound for each platform is the best evidence.
 
 ## Results
 
-Fill in one row per check; add the machine (model, processor, memory, screen and refresh rate) and the versions (Windows build or macOS version, screen reader version).
+Fill in one row per check; add the machine (model, processor, graphics, memory, screen and refresh rate) and the versions (Windows build, macOS version or Ubuntu release and session, screen reader version). The Linux column of test 2 may say "not tried" if no input method was set up; every other Linux cell needs a result.
 
 | Test | Check | Windows 11 | macOS | Linux |
 |---|---|---|---|---|
 | 1 | Benchmark at 100 % (paste the three lines) | | | |
-| 1 | Benchmark at 125 % and 150 % | | n/a | |
+| 1 | Benchmark at high DPI: Windows 125 % and 150 %, Linux 200 % (and 125 % if offered); the Mac's 100 % run is already Retina | | n/a | |
 | 1 | Scrolling, zooming, second screen by hand | | | |
 | 2 | Japanese a–e | | | |
 | 2 | Chinese a–b | | | |
 | 2 | Korean a–c | | | |
+| 2 | Ending a composition early a–c | | | |
 | 2 | Accent menu and emoji | n/a | | n/a |
 | 3 | Announcement on focus (a) | | | |
-| 3 | Reading the whole document (b, c) | | | |
-| 3 | Typing echo and caret (c, d) | | | |
-| 3 | East Asian text read aloud (e) | | | |
+| 3 | Reading the whole document (b, c; Orca b) | | | |
+| 3 | Typing echo and caret (c, d; Orca c) | | | |
+| 3 | East Asian text read aloud (e) | | | n/a |
 | | Machine and versions | | | |

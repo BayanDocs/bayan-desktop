@@ -52,8 +52,9 @@ public:
   // The engine's version string.
   static QString version();
 
-  // Sends a fire-and-forget message. Returns false if the engine refused it. Prefer request(): the engine answers every request before it
-  // sends the events that handling it caused, so the reply tells the shell which message an event belongs to (see lastPostedRequest()).
+  // Sends a fire-and-forget message. Returns false if the engine refused it. Prefer request(): the v0 engine answers every request before
+  // it sends the events that handling it caused (the protocol states it only for view.set so far; see DocumentSession), so the reply tells
+  // the shell which message an event belongs to (see lastPostedRequest()).
   bool post(const QString &type, const QJsonObject &payload = {});
 
   // Sends a request and returns its identifier (greater than 0), or 0 if the engine refused it. The answer arrives through replyReceived.
