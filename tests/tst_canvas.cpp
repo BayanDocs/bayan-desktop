@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <limits>
 #include <memory>
+#include <utility>
 #include <vector>
 
 using namespace Qt::StringLiterals;
@@ -162,6 +163,73 @@ QList<QInputMethodEvent::Attribute> underlined(int length, int cursor) {
           QInputMethodEvent::Attribute(QInputMethodEvent::Cursor, cursor, 1, QVariant())};
 }
 
+// Plays a platform's input context for the canvas, which the offscreen platform lacks. Like Qt 6.12's Windows input context, it ignores
+// commit(); reset() commits the composition it holds with an input-method event and ends it, and Windows does that too when the focus
+// object changes while it composes. Like macOS's and IBus's, commit() commits instead (commitsOnCommit).
+class PlatformInputMethod {
+public:
+  PlatformInputMethod(bayan::DocumentCanvas &canvas, bool commitsOnCommit) : canvas_(canvas), commitsOnCommit_(commitsOnCommit) {
+    canvas_.setInputMethodControl({.commit = [this] { commit(); }, .reset = [this] { reset(); }});
+  }
+  ~PlatformInputMethod() { canvas_.setInputMethodControl(bayan::DocumentCanvas::platformInputMethodControl()); }
+  PlatformInputMethod(const PlatformInputMethod &) = delete;
+  PlatformInputMethod &operator=(const PlatformInputMethod &) = delete;
+  PlatformInputMethod(PlatformInputMethod &&) = delete;
+  PlatformInputMethod &operator=(PlatformInputMethod &&) = delete;
+
+  // The user types into the composition, which the input method shows as pre-edit text.
+  void type(const QString &text) {
+    composition_ += text;
+    sendIme(&canvas_, composition_, underlined(static_cast<int>(composition_.size()), static_cast<int>(composition_.size())));
+  }
+  // The user confirms the composition (Enter).
+  void confirm() { commitComposition(); }
+  // What Windows does when the focus object changes while it composes (QWindowsInputContext::setFocusObject).
+  void focusObjectChanged() {
+    if (!commitsOnCommit_) {
+      reset();
+    }
+  }
+  [[nodiscard]] int resets() const { return resets_; }
+
+private:
+  void commit() {
+    if (commitsOnCommit_) {
+      commitComposition();
+    }
+  }
+  void reset() {
+    ++resets_;
+    commitComposition();
+  }
+  void commitComposition() {
+    if (composition_.isEmpty()) {
+      return;
+    }
+    QInputMethodEvent event;
+    event.setCommitString(composition_);
+    composition_.clear();
+    QCoreApplication::sendEvent(&canvas_, &event);
+  }
+
+  bayan::DocumentCanvas &canvas_;
+  bool commitsOnCommit_;
+  QString composition_;
+  int resets_ = 0;
+};
+
+// Clicks on the right half of a character of the editable line, which puts the engine's caret after it.
+void clickAfterCharacter(const Fixture &fixture, int index) {
+  const auto *node = editableNode(fixture.session->accessibilityTree());
+  QVERIFY(node != nullptr && node->bounds && std::cmp_less(index, node->chars.size()));
+  const int page = node->bounds.value_or(bayan::protocol::PageRect{}).page;
+  const QRectF box =
+      itemRect(*fixture.canvas, bayan::protocol::PageRect{.page = page, .rect = node->chars.at(static_cast<std::size_t>(index)).rect});
+  QVERIFY(!box.isEmpty());
+  const QPoint click(qRound(box.right() - (box.width() / 4)), qRound(box.center().y()));
+  QTest::mouseClick(fixture.window.get(), Qt::LeftButton, Qt::NoModifier, fixture.canvas->mapToScene(click).toPoint());
+}
+
 // Accessibility events recorded by the update handler (QAccessible::installUpdateHandler).
 struct RecordedEvent {
   QAccessible::Event type = QAccessible::InvalidEvent;
@@ -208,6 +276,8 @@ private slots:
   void koreanSyllablesCommitOneByOne();
   void cancelledCompositionLeavesTheText();
   void accentMenuReplacesTheCharacterBeforeTheCaret();
+  void endingACompositionCommitsItOnceOnWindows();
+  void endingACompositionOnMacOSAndLinuxNeedsNoReset();
   void deletingAroundTheCaretStaysInTheEditableText();
   void clickMovesTheCaret();
   void doubleClickIsTwoPressesAndTwoReleases();
@@ -535,6 +605,55 @@ void TestCanvas::accentMenuReplacesTheCharacterBeforeTheCaret() {
   QTRY_COMPARE(editableText(*fixture->session), u"cafe"_s);
   sendIme(fixture->canvas, QString(), {}, u"é"_s, -1, 1);
   QTRY_COMPARE(editableText(*fixture->session), u"café"_s);
+}
+
+void TestCanvas::endingACompositionCommitsItOnceOnWindows() {
+  const auto fixture = openDocument();
+  QVERIFY(fixture);
+  if (!fixture->hasMockDocument()) {
+    QVERIFY2(!mockDocumentRequired(), "the engine has no mock document");
+    QSKIP("Needs the mock document of the real engine (BAYAN_ENGINE=sdk).");
+  }
+  PlatformInputMethod ime(*fixture->canvas, false);
+  typeText(fixture->window.get(), u"ab"_s);
+  QTRY_COMPARE(editableText(*fixture->session), u"ab"_s);
+  // A click in the line while composing commits the composition once, and the input method starts afresh with the next key.
+  ime.type(u"ねこ"_s);
+  QTRY_COMPARE(editableText(*fixture->session), u"abねこ"_s);
+  clickAfterCharacter(*fixture, 3);
+  QTRY_VERIFY(!fixture->canvas->composing());
+  ime.type(u"か"_s);
+  ime.confirm();
+  QTRY_COMPARE(editableText(*fixture->session), u"abねこか"_s);
+  // Moving the focus away while composing commits it once, also when the input method resets for the new focus object.
+  ime.type(u"い"_s);
+  QTRY_COMPARE(editableText(*fixture->session), u"abねこかい"_s);
+  QQuickItem next(fixture->window->contentItem());
+  next.forceActiveFocus(Qt::TabFocusReason);
+  QTRY_VERIFY(next.hasActiveFocus());
+  ime.focusObjectChanged();
+  QTRY_VERIFY(!fixture->canvas->composing());
+  QTest::qWait(100); // Nothing else arrives.
+  QCOMPARE(editableText(*fixture->session), u"abねこかい"_s);
+  QCOMPARE(ime.resets(), 3);
+}
+
+void TestCanvas::endingACompositionOnMacOSAndLinuxNeedsNoReset() {
+  const auto fixture = openDocument();
+  QVERIFY(fixture);
+  if (!fixture->hasMockDocument()) {
+    QVERIFY2(!mockDocumentRequired(), "the engine has no mock document");
+    QSKIP("Needs the mock document of the real engine (BAYAN_ENGINE=sdk).");
+  }
+  // macOS's and IBus's input contexts commit on commit(); the canvas then has nothing left to reset or to commit itself.
+  PlatformInputMethod ime(*fixture->canvas, true);
+  ime.type(u"ねこ"_s);
+  QTRY_COMPARE(editableText(*fixture->session), u"ねこ"_s);
+  clickAfterCharacter(*fixture, 1);
+  QTRY_VERIFY(!fixture->canvas->composing());
+  QTest::qWait(100);
+  QCOMPARE(editableText(*fixture->session), u"ねこ"_s);
+  QCOMPARE(ime.resets(), 0);
 }
 
 void TestCanvas::deletingAroundTheCaretStaysInTheEditableText() {

@@ -822,12 +822,22 @@ void DocumentCanvas::inputMethodEvent(QInputMethodEvent *event) {
   event->accept();
 }
 
+DocumentCanvas::InputMethodControl DocumentCanvas::platformInputMethodControl() {
+  return {.commit = [] { QGuiApplication::inputMethod()->commit(); }, .reset = [] { QGuiApplication::inputMethod()->reset(); }};
+}
+
 void DocumentCanvas::finishComposition() {
   if (!ime_.composing()) {
     return;
   }
-  // Ask the platform's input method to commit, as Qt Quick's own text editors do; it answers with an input-method event.
-  QGuiApplication::inputMethod()->commit();
+  // Ask the platform's input method to commit, as Qt Quick's own text editors do; it answers with an input-method event that commits the
+  // text (macOS, IBus). Windows' input context ignores commit() (Qt 6.12) and commits only when reset, ending its composition there too.
+  // Without the reset it would still be composing: it would commit the same text again when the focus object changes, and continue the old
+  // composition with the next key.
+  inputMethodControl_.commit();
+  if (ime_.composing()) {
+    inputMethodControl_.reset();
+  }
   if (ime_.composing() && session_ != nullptr) {
     // No input method answered (for example the offscreen platform): commit the composition as it stands.
     session_->sendText(ime_.composition());

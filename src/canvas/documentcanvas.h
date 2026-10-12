@@ -37,9 +37,11 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace bayan {
@@ -151,6 +153,14 @@ public:
   [[nodiscard]] const CanvasStatistics &statistics() const { return statistics_; }
   void resetStatistics() { statistics_ = {}; }
   [[nodiscard]] bool composing() const { return ime_.composing(); }
+  // How the canvas asks the platform's input method to end a composition: QInputMethod::commit() and reset() (see finishComposition).
+  // Tests replace them to play a platform's input context, which the offscreen platform lacks.
+  struct InputMethodControl {
+    std::function<void()> commit;
+    std::function<void()> reset;
+  };
+  [[nodiscard]] static InputMethodControl platformInputMethodControl();
+  void setInputMethodControl(InputMethodControl control) { inputMethodControl_ = std::move(control); }
   // What the input method asks: the caret's rectangle, the text around it and whether text can be typed here (public in QQuickItem).
   [[nodiscard]] QVariant inputMethodQuery(Qt::InputMethodQuery query) const override;
 
@@ -268,6 +278,7 @@ private:
   CanvasStatistics statistics_;
 
   ImeTranslator ime_;
+  InputMethodControl inputMethodControl_ = platformInputMethodControl();
   // The text around the caret when the current composition started; the input method sees it, without the composition, until it ends.
   std::optional<EditContext> compositionContext_;
   AccessibleText accessibleText_;
