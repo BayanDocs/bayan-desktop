@@ -4,7 +4,10 @@
 # Python is the runner image's own Python 3, as in every other BayanDocs workflow, so nothing is downloaded for it; each job checks that it is
 # 3.11 or newer, which scripts/dev-setup.sh and the tests need, and prints its version.
 # scripts/dev-setup.sh does the installing, so CI uses exactly what developers and cloud sessions use. scripts/test-engine-sdk.sh checks, on every
-# operating system, that the app also builds and passes its engine tests against a shared-library engine laid out like the bayan-core C SDK.
+# operating system, that the app also builds and passes its engine tests against a shared-library engine laid out like the bayan-core C SDK:
+# a stand-in built from the stub engine, and the real engine, which scripts/build-engine-sdk.sh builds from the bayan-core commit pinned in
+# deps/bayan-core.json (ADR-0002 §4, Phase 0) with the Rust version that commit pins, installed by the runner's rustup, and the crates of its
+# Cargo.lock. The real engine's mock document is what the typing, input-method and accessibility tests of DESK-002 need.
 name: CI
 
 on:
@@ -62,6 +65,12 @@ jobs:
         run: cmake --workflow --preset verify
       - name: Engine SDK path (stub built as a stand-in SDK; build and engine tests with BAYAN_ENGINE=sdk)
         run: scripts/test-engine-sdk.sh
+      - name: Build the bayan-core C SDK from the commit pinned in deps/bayan-core.json
+        run: scripts/build-engine-sdk.sh
+      - name: Real engine (CORE-007's mock document; build and engine tests with BAYAN_ENGINE=sdk, none of them skipped)
+        env:
+          BAYAN_REQUIRE_MOCK_DOCUMENT: '1'
+        run: scripts/test-engine-sdk.sh --sdk build/bayan-core-sdk
 
   sanitizers:
     name: Linux · AddressSanitizer and UndefinedBehaviorSanitizer
@@ -133,6 +142,12 @@ jobs:
         run: cmake --workflow --preset ci
       - name: Engine SDK path (stub built as a stand-in SDK; build and engine tests with BAYAN_ENGINE=sdk)
         run: scripts/test-engine-sdk.sh
+      - name: Build the bayan-core C SDK from the commit pinned in deps/bayan-core.json
+        run: scripts/build-engine-sdk.sh
+      - name: Real engine (CORE-007's mock document; build and engine tests with BAYAN_ENGINE=sdk, none of them skipped)
+        env:
+          BAYAN_REQUIRE_MOCK_DOCUMENT: '1'
+        run: scripts/test-engine-sdk.sh --sdk build/bayan-core-sdk
 
   windows:
     name: Windows (MSVC) · build and test
@@ -166,6 +181,10 @@ jobs:
         run: '"$PYTHON" scripts/check-qt-release-age.py'
       - name: Install pinned tools and Qt
         run: scripts/dev-setup.sh
+      - name: Build the bayan-core C SDK from the commit pinned in deps/bayan-core.json
+        # Before the MSVC developer environment is loaded: in it, Git Bash's own link.exe comes first on PATH and Rust would take it for the
+        # MSVC linker, which Rust otherwise finds by itself.
+        run: scripts/build-engine-sdk.sh
       - name: Set up the MSVC developer environment (x64)
         shell: pwsh
         run: |
@@ -181,3 +200,7 @@ jobs:
         run: cmake --workflow --preset msvc
       - name: Engine SDK path (stub built as a stand-in SDK; build and engine tests with BAYAN_ENGINE=sdk)
         run: scripts/test-engine-sdk.sh
+      - name: Real engine (CORE-007's mock document; build and engine tests with BAYAN_ENGINE=sdk, none of them skipped)
+        env:
+          BAYAN_REQUIRE_MOCK_DOCUMENT: '1'
+        run: scripts/test-engine-sdk.sh --sdk build/bayan-core-sdk

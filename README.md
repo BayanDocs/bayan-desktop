@@ -6,7 +6,7 @@ This repository is a deliberately **thin shell**: windows, menus, the ribbon and
 
 Built with C++20 and Qt 6 (Qt Quick), using only LGPL-licensed Qt modules.
 
-> **Status: Phase 0 (Foundations).** The scaffold from [DESK-001](https://github.com/BayanDocs/docs/blob/HEAD/workpackages/phase-0/DESK-001-desktop-scaffold.md) is in place: a Qt Quick window with a placeholder ribbon and a document area that shows a page rendered by a stub engine, the engine integration layer, tests and CI. The real engine arrives with bayan-core's C SDK (CORE-007) and the document canvas with DESK-002.
+> **Status: Phase 0 (Foundations).** The scaffold from [DESK-001](https://github.com/BayanDocs/docs/blob/HEAD/workpackages/phase-0/DESK-001-desktop-scaffold.md) is in place, and the document canvas from [DESK-002](https://github.com/BayanDocs/docs/blob/HEAD/workpackages/phase-0/DESK-002-spike-qt-canvas.md): the engine's pages as tiles that scroll and zoom smoothly, keys and East Asian input methods passed to the engine, and the document's text for screen readers ([report](docs/spikes/DESK-002-report.md)). It runs against a stub engine or against the real engine of bayan-core's C SDK (CORE-007), whose mock document is all there is to show yet.
 
 ## Building
 
@@ -26,7 +26,7 @@ What each operating system needs before running the script:
 - **macOS (Apple silicon):** the Xcode command line tools (`xcode-select --install`) and Python 3.11 or newer.
 - **Windows:** Visual Studio 2022 with the "Desktop development with C++" workload, Git for Windows (run the script in Git Bash) and Python 3.11 or newer. Then open an "x64 Native Tools" developer prompt, put the tools folder and Qt's `bin` folder that the script printed at the front of `PATH`, set `CMAKE_PREFIX_PATH` to the Qt folder, and run `cmake --workflow --preset msvc`.
 
-The sanitizer build (`cmake --workflow --preset asan`, Linux) runs the tests with AddressSanitizer and UndefinedBehaviorSanitizer. `bayan-desktop --smoke-test` starts the app, checks that the engine's page is displayed and exits; CI runs it without a screen (`QT_QPA_PLATFORM=offscreen`). `scripts/test-engine-sdk.sh` builds the app against the engine as a separate shared library, laid out like bayan-core's C SDK ([src/engine/README.md](src/engine/README.md)), as it will be once that SDK exists.
+The sanitizer build (`cmake --workflow --preset asan`, Linux) runs the tests with AddressSanitizer and UndefinedBehaviorSanitizer. `bayan-desktop --smoke-test` starts the app, checks that the engine's page is displayed and exits; CI runs it without a screen (`QT_QPA_PLATFORM=offscreen`). `bayan-desktop --benchmark <file>` scrolls, zooms and types by itself and writes frame times, tile timings and memory as JSON (DESK-002). `scripts/test-engine-sdk.sh` builds the app against the engine as a separate shared library, laid out like bayan-core's C SDK ([src/engine/README.md](src/engine/README.md)); `scripts/build-engine-sdk.sh` builds the real SDK from the bayan-core commit pinned in `deps/bayan-core.json` (it needs rustup), and `scripts/test-engine-sdk.sh --sdk build/bayan-core-sdk` tests the app against it.
 
 ## Where things are decided
 

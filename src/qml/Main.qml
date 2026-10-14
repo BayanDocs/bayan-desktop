@@ -17,6 +17,8 @@ ApplicationWindow {
     header: Ribbon {}
 
     DocumentArea {
+        id: documentArea
+
         anchors.fill: parent
         session: window.session
     }
@@ -35,6 +37,15 @@ ApplicationWindow {
             text: window.session.status === DocumentSession.Status.Ready
                   ? qsTr("Engine %1 · %n page(s)", "", window.session.pageCount).arg(window.session.engineVersion)
                   : window.session.status === DocumentSession.Status.Failed ? qsTr("Engine stopped") : qsTr("Starting the engine…")
+        }
+
+        Label {
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.right: parent.right
+            anchors.rightMargin: 8
+            color: Theme.mutedText
+            visible: window.session.status === DocumentSession.Status.Ready
+            text: qsTr("Zoom %1 %").arg(Math.round(documentArea.canvas.zoom * 100))
         }
     }
 }

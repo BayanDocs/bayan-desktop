@@ -19,8 +19,10 @@ set(BAYAN_QT_FORBIDDEN_MODULES
 )
 
 # Exact module names (without the Qt6:: prefix) that our targets may link directly. All are LGPLv3 (or GPLv2) per the Qt 6.12 documentation.
+# Platform is not a library: it is qtbase's interface target that carries Qt's include paths, its minimum C++ standard and the threads
+# library, and Qt's own CMake commands (qt_add_library, qt_add_qml_module's plugin) link it to the targets they create. It contains no code.
 set(BAYAN_QT_ALLOWED_MODULES
-  Core Gui Qml QmlIntegration QmlMeta QmlModels QmlWorkerScript Quick QuickControls2 Test QuickTest
+  Core Gui Qml QmlIntegration QmlMeta QmlModels QmlWorkerScript Quick QuickControls2 Test QuickTest Platform
 )
 
 set(BAYAN_QT_POLICY_DOC "ADR-0013 and cmake/BayanQtPolicy.cmake")

@@ -1,4 +1,6 @@
-// Unit tests for the engine wrapper (src/engine/engine.h), run against the stub engine.
+// Unit tests for the engine wrapper (src/engine/engine.h), against the engine the build links: the stub engine (BAYAN_ENGINE=stub) or the
+// real engine of bayan-core's C SDK (BAYAN_ENGINE=sdk). The checks of particular pixels and pages know the stub's test page and skip with
+// the real engine, whose pixels tst_canvas compares with the engine's own rendering.
 
 #include "engine.h"
 
@@ -20,7 +22,11 @@ using namespace Qt::StringLiterals;
 
 namespace {
 
-// Geometry of the stub's test page (US Letter) in BLU, and the factor from BLU to device-independent pixels at 100 %.
+// Whether the linked engine is the stub, which reports a version ending in -stub (also as the stand-in SDK of scripts/test-engine-sdk.sh).
+bool isStub() { return bayan::Engine::version().endsWith(u"-stub"_s); }
+
+// Geometry of a US Letter page in BLU (the stub's test page and the pages of the real engine's mock document), and the factor from BLU to
+// device-independent pixels at 100 %.
 constexpr qint64 kPageWidth = 15'544'800;
 constexpr qint64 kPageHeight = 20'116'800;
 constexpr qint64 kBluPerDip = 19'050;
@@ -77,11 +83,12 @@ private slots:
   void invalidTileRequestsAreRefused();
   void deliveriesFromAnotherThreadArriveOnTheMainThread();
   void malformedEngineMessagesAreProtocolErrors();
+  void repliesMustAnswerPostedRequestsInOrder();
   void oversizedEngineMessagesAreRejected();
   void destroyingWhileBusyIsSafe();
 
 private:
-  // Starts an engine, completes the handshake and opens the stub document.
+  // Starts an engine, completes the handshake and opens its document (the stub's test page or the real engine's mock document).
   static std::unique_ptr<bayan::Engine> openedEngine();
 };
 
@@ -103,7 +110,13 @@ std::unique_ptr<bayan::Engine> TestEngine::openedEngine() {
   return engine;
 }
 
-void TestEngine::versionIsReported() { QCOMPARE(bayan::Engine::version(), u"0.0.0-stub"_s); }
+void TestEngine::versionIsReported() {
+  const QString version = bayan::Engine::version();
+  QVERIFY(!version.isEmpty());
+  if (isStub()) {
+    QCOMPARE(version, u"0.0.0-stub"_s);
+  }
+}
 
 void TestEngine::handshakeRepliesOnTheMainThread() {
   const auto engine = bayan::Engine::create();
@@ -119,7 +132,7 @@ void TestEngine::handshakeRepliesOnTheMainThread() {
   QVERIFY(reply.at(1).toBool());
   const auto payload = reply.at(2).toJsonObject();
   QCOMPARE(payload.value(u"protocol_version"_s).toInt(-1), bayan::Engine::kProtocolVersion);
-  QCOMPARE(payload.value(u"engine_version"_s).toString(), u"0.0.0-stub"_s);
+  QCOMPARE(payload.value(u"engine_version"_s).toString(), bayan::Engine::version());
   QCOMPARE(replyThread, QThread::currentThread());
 }
 
@@ -162,15 +175,26 @@ void TestEngine::openingADocumentAnnouncesItsPages() {
   const auto engine = openedEngine();
   QVERIFY(engine);
   QSignalSpy events(engine.get(), &bayan::Engine::eventReceived);
-  QVERIFY(engine->post(u"view.set"_s, QJsonObject{{u"doc_id"_s, 1}, {u"zoom"_s, 1.0}, {u"mode"_s, u"print"_s}}));
+  const QJsonObject viewport{{u"x"_s, 0}, {u"y"_s, 0}, {u"width"_s, 1024}, {u"height"_s, 768}};
+  QVERIFY(engine->post(
+      u"view.set"_s,
+      QJsonObject{{u"doc_id"_s, 1}, {u"viewport"_s, viewport}, {u"zoom"_s, 1.0}, {u"device_scale"_s, 1.0}, {u"mode"_s, u"print"_s}}));
   QTRY_VERIFY(events.count() >= 3);
+  // First the pages, then what to draw again (engine protocol §6.2, §6.3).
   QCOMPARE(events.at(0).at(0).toString(), u"view.pages"_s);
   const QJsonArray pages = events.at(0).at(1).toJsonObject().value(u"pages"_s).toArray();
-  QCOMPARE(pages.size(), 1);
-  QCOMPARE(pages.at(0).toObject().value(u"width"_s).toInteger(), kPageWidth);
-  QCOMPARE(pages.at(0).toObject().value(u"height"_s).toInteger(), kPageHeight);
+  // The stub has one test page; the real engine's mock document has three. Both are US Letter.
+  QCOMPARE(pages.size(), isStub() ? 1 : 3);
+  for (const auto &page : pages) {
+    QCOMPARE(page.toObject().value(u"width"_s).toInteger(), kPageWidth);
+    QCOMPARE(page.toObject().value(u"height"_s).toInteger(), kPageHeight);
+  }
   QCOMPARE(events.at(1).at(0).toString(), u"render.invalidate"_s);
-  QCOMPARE(events.at(2).at(0).toString(), u"view.layout.progress"_s);
+  bool progress = false;
+  for (const auto &event : std::as_const(events)) {
+    progress = progress || event.at(0).toString() == u"view.layout.progress"_s;
+  }
+  QVERIFY(progress);
 }
 
 void TestEngine::blobsRoundTrip() {
@@ -196,6 +220,9 @@ void TestEngine::blobsRoundTrip() {
 }
 
 void TestEngine::tileShowsTheTestPage() {
+  if (!isStub()) {
+    QSKIP("Checks the stub's test page; tst_canvas compares the real engine's pixels with its own rendering.");
+  }
   const auto engine = openedEngine();
   QVERIFY(engine);
   // The whole page at 100 %: 816 x 1056 device-independent pixels.
@@ -215,6 +242,9 @@ void TestEngine::tileShowsTheTestPage() {
 }
 
 void TestEngine::tileOutsideThePageIsTransparent() {
+  if (!isStub()) {
+    QSKIP("Checks the stub's test page.");
+  }
   const auto engine = openedEngine();
   QVERIFY(engine);
   // A tile whose left half lies beyond the page's left edge.
@@ -284,6 +314,28 @@ void TestEngine::malformedEngineMessagesAreProtocolErrors() {
   QTRY_COMPARE(errors.count(), malformed.size());
   QCOMPARE(events.count(), 0);
   QCOMPARE(replies.count(), 0);
+}
+
+void TestEngine::repliesMustAnswerPostedRequestsInOrder() {
+  const auto engine = bayan::Engine::create();
+  QVERIFY(engine);
+  QSignalSpy errors(engine.get(), &bayan::Engine::protocolError);
+  QSignalSpy replies(engine.get(), &bayan::Engine::replyReceived);
+  // A reply to a request that was never posted.
+  deliver(*engine, R"({"v":0,"re":1,"ok":true})"_ba);
+  QTRY_COMPARE(errors.count(), 1);
+  QCOMPARE(replies.count(), 0);
+  // The engine's own reply is accepted; a second reply to the same request, or one to a request answered already, is not.
+  const qint64 first = engine->request(u"no.such.message"_s);
+  QVERIFY(!waitForReply(replies, first).isEmpty());
+  const qint64 second = engine->request(u"no.such.message"_s);
+  QVERIFY(!waitForReply(replies, second).isEmpty());
+  const int answered = static_cast<int>(replies.count());
+  for (const qint64 id : {second, first}) {
+    deliver(*engine, R"({"v":0,"re":)"_ba + QByteArray::number(id) + R"(,"ok":true})"_ba);
+  }
+  QTRY_COMPARE(errors.count(), 3);
+  QCOMPARE(replies.count(), answered);
 }
 
 void TestEngine::oversizedEngineMessagesAreRejected() {
