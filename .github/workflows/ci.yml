@@ -23,7 +23,7 @@ concurrency:
 
 env:
   # Ubuntu packages Qt needs to build and to run headless, from the Ubuntu archive frozen at a date (same as the cloud environment, and as the C++ job of codeql.yml: tests/workflows/test_ubuntu_packages.py keeps the two workflows equal).
-  UBUNTU_SNAPSHOT: 20261003T000000Z
+  UBUNTU_SNAPSHOT: 20261025T000000Z
   UBUNTU_PACKAGES: libgl-dev libegl-dev libvulkan-dev libxkbcommon-dev libfontconfig-dev libdbus-1-dev
 
 jobs:
