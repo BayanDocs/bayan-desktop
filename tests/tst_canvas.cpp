@@ -267,7 +267,10 @@ private slots:
   void zoomKeepsThePointUnderThePointer();
   void standInsAreDrawnInTheOrderGiven();
   void aNewSessionForgetsTheOldEnginesChanges();
-  void keysAndTheWheelMoveTheView();
+  void theWheelScrollsAndZooms();
+  void everyKeyButTabGoesToTheEngine();
+  void scrollWithKeyScrollsLikeAFocusedScroller();
+  void zoomInAndOutStepThroughTheZoomSteps();
   void tabLeavesTheCanvas();
   void stubHasNoEditableText();
   void typingReachesTheEditableLine();
@@ -422,29 +425,153 @@ void TestCanvas::aNewSessionForgetsTheOldEnginesChanges() {
   canvas.setSession(nullptr);
 }
 
-void TestCanvas::keysAndTheWheelMoveTheView() {
+void TestCanvas::theWheelScrollsAndZooms() {
   const auto fixture = openDocument();
   QVERIFY(fixture);
   bayan::DocumentCanvas &canvas = *fixture->canvas;
-  // Page Down scrolls by most of the view (the stub's single page is shorter than that, so only to the end).
-  QTest::keyClick(fixture->window.get(), Qt::Key_PageDown);
-  QTRY_COMPARE(canvas.contentY(), std::min(canvas.height() * 0.9, canvas.contentHeight() - canvas.height()));
-  QTest::keyClick(fixture->window.get(), Qt::Key_PageUp);
-  QTRY_COMPARE(canvas.contentY(), 0.0);
   // A mouse wheel notch scrolls down by the platform's lines per notch.
   QWheelEvent wheel(QPointF(100, 100), fixture->window->mapToGlobal(QPointF(100, 100)), QPoint(), QPoint(0, -120), Qt::NoButton,
                     Qt::NoModifier, Qt::NoScrollPhase, false);
   QCoreApplication::sendEvent(&canvas, &wheel);
   QTRY_VERIFY(canvas.contentY() > 0.0);
-  // With Control, it zooms; Control+0 goes back to 100 %.
+  // With Control, it zooms.
   QWheelEvent zoomWheel(QPointF(100, 100), fixture->window->mapToGlobal(QPointF(100, 100)), QPoint(), QPoint(0, 120), Qt::NoButton,
                         Qt::ControlModifier, Qt::NoScrollPhase, false);
   QCoreApplication::sendEvent(&canvas, &zoomWheel);
   QCOMPARE(canvas.zoom(), 1.1);
-  QTest::keyClick(fixture->window.get(), Qt::Key_0, Qt::ControlModifier);
+}
+
+void TestCanvas::everyKeyButTabGoesToTheEngine() {
+  // The canvas keeps no key for itself, as the web shell (review H5): Page Up, Page Down, Home, End and the arrows go to the engine with
+  // their modifiers, and so do Control with =, -, + and 0, which zoomed before and hid Word's shortcuts (Control+= is subscript). Each key
+  // press is one input.key request; QTest also presses the modifier keys, which the canvas forwards too. The view neither scrolls nor
+  // zooms.
+  const auto fixture = openDocument();
+  QVERIFY(fixture);
+  bayan::DocumentCanvas &canvas = *fixture->canvas;
+  bayan::Engine &engine = *fixture->engine;
+  QTest::qWait(300); // Lets a view.set scheduled while the document opened go out first.
+  struct Press {
+    Qt::Key key;
+    Qt::KeyboardModifiers modifiers;
+    qint64 requests;
+  };
+  const std::vector<Press> presses{
+      {.key = Qt::Key_PageDown, .modifiers = Qt::NoModifier, .requests = 1},
+      {.key = Qt::Key_PageUp, .modifiers = Qt::NoModifier, .requests = 1},
+      {.key = Qt::Key_End, .modifiers = Qt::NoModifier, .requests = 1},
+      {.key = Qt::Key_Home, .modifiers = Qt::NoModifier, .requests = 1},
+      {.key = Qt::Key_End, .modifiers = Qt::ControlModifier, .requests = 2},
+      {.key = Qt::Key_Home, .modifiers = Qt::ControlModifier, .requests = 2},
+      {.key = Qt::Key_PageDown, .modifiers = Qt::ShiftModifier, .requests = 2},
+      {.key = Qt::Key_Down, .modifiers = Qt::NoModifier, .requests = 1},
+      {.key = Qt::Key_Up, .modifiers = Qt::NoModifier, .requests = 1},
+      {.key = Qt::Key_Equal, .modifiers = Qt::ControlModifier, .requests = 2},
+      {.key = Qt::Key_Plus, .modifiers = Qt::ControlModifier, .requests = 2},
+      {.key = Qt::Key_Minus, .modifiers = Qt::ControlModifier, .requests = 2},
+      {.key = Qt::Key_0, .modifiers = Qt::ControlModifier, .requests = 2},
+  };
+  for (const Press &press : presses) {
+    const qint64 before = engine.lastPostedRequest();
+    QTest::keyClick(fixture->window.get(), press.key, press.modifiers);
+    QCOMPARE(engine.lastPostedRequest(), before + press.requests);
+  }
+  QTest::qWait(300); // Longer than a smooth scroll and than the zoom settling.
   QCOMPARE(canvas.zoom(), 1.0);
-  QTest::keyClick(fixture->window.get(), Qt::Key_Plus, Qt::ControlModifier);
+  QCOMPARE(canvas.contentY(), 0.0);
+  QCOMPARE(canvas.contentX(), 0.0);
+  // Tab is the exception: it moves the keyboard focus on (tabLeavesTheCanvas) and sends nothing.
+  const qint64 before = engine.lastPostedRequest();
+  QTest::keyClick(fixture->window.get(), Qt::Key_Tab);
+  QCOMPARE(engine.lastPostedRequest(), before);
+}
+
+void TestCanvas::scrollWithKeyScrollsLikeAFocusedScroller() {
+  // The keys of the document area, the "Pages" item before the canvas (DocumentArea.qml).
+  const auto fixture = openDocument();
+  QVERIFY(fixture);
+  bayan::DocumentCanvas &canvas = *fixture->canvas;
+  const double bottom = canvas.contentHeight() - canvas.height();
+  QVERIFY(bottom > bayan::DocumentCanvas::kArrowScrollStep);
+  // QML hands the key event's modifiers over as a number.
+  const auto flags = [](Qt::KeyboardModifiers modifiers) { return static_cast<int>(modifiers.toInt()); };
+  const int none = flags(Qt::NoModifier);
+  // Page Down scrolls by most of the view (or to the end, if the pages are shorter than that).
+  QVERIFY(canvas.scrollWithKey(Qt::Key_PageDown, none));
+  QTRY_COMPARE(canvas.contentY(), std::min(canvas.height() * 0.9, bottom));
+  QVERIFY(canvas.scrollWithKey(Qt::Key_PageUp, none));
+  QTRY_COMPARE(canvas.contentY(), 0.0);
+  QVERIFY(canvas.scrollWithKey(Qt::Key_End, none));
+  QTRY_COMPARE(canvas.contentY(), bottom);
+  QVERIFY(canvas.scrollWithKey(Qt::Key_Home, flags(Qt::ControlModifier)));
+  QTRY_COMPARE(canvas.contentY(), 0.0);
+  QVERIFY(canvas.scrollWithKey(Qt::Key_End, flags(Qt::ControlModifier | Qt::KeypadModifier)));
+  QTRY_COMPARE(canvas.contentY(), bottom);
+  QVERIFY(canvas.scrollWithKey(Qt::Key_Home, none));
+  QTRY_COMPARE(canvas.contentY(), 0.0);
+  QVERIFY(canvas.scrollWithKey(Qt::Key_Down, none));
+  QTRY_COMPARE(canvas.contentY(), bayan::DocumentCanvas::kArrowScrollStep);
+  QVERIFY(canvas.scrollWithKey(Qt::Key_Up, none));
+  QTRY_COMPARE(canvas.contentY(), 0.0);
+  // Sideways once the pages are wider than the view.
+  canvas.setZoom(2.0);
+  QVERIFY(canvas.contentWidth() - canvas.width() > bayan::DocumentCanvas::kArrowScrollStep);
+  const double left = canvas.contentX();
+  QVERIFY(canvas.scrollWithKey(Qt::Key_Right, none));
+  QTRY_COMPARE(canvas.contentX(), left + bayan::DocumentCanvas::kArrowScrollStep);
+  QVERIFY(canvas.scrollWithKey(Qt::Key_Left, none));
+  QTRY_COMPARE(canvas.contentX(), left);
+  // Other keys and modifiers are not the area's.
+  for (const auto &[key, modifiers] : std::vector<std::pair<int, int>>{{Qt::Key_PageDown, flags(Qt::ShiftModifier)},
+                                                                       {Qt::Key_Home, flags(Qt::AltModifier)},
+                                                                       {Qt::Key_Down, flags(Qt::ControlModifier)},
+                                                                       {Qt::Key_A, none},
+                                                                       {Qt::Key_Tab, none},
+                                                                       {Qt::Key_Space, none},
+                                                                       {Qt::Key_Return, none}}) {
+    QVERIFY2(!canvas.scrollWithKey(key, modifiers), qPrintable(u"key %1, modifiers %2"_s.arg(key).arg(modifiers)));
+  }
+}
+
+void TestCanvas::zoomInAndOutStepThroughTheZoomSteps() {
+  // The Zoom in and Zoom out buttons' steps: the web shell's, and 10 %, the canvas's smallest zoom.
+  const auto fixture = openDocument();
+  QVERIFY(fixture);
+  bayan::DocumentCanvas &canvas = *fixture->canvas;
+  canvas.zoomIn();
+  QCOMPARE(canvas.zoom(), 1.1);
+  canvas.zoomIn();
   QCOMPARE(canvas.zoom(), 1.25);
+  canvas.zoomOut();
+  canvas.zoomOut();
+  canvas.zoomOut();
+  QCOMPARE(canvas.zoom(), 0.9);
+  // From between two steps (the wheel and pinching zoom freely), to the next step either way.
+  canvas.setZoom(1.3);
+  canvas.zoomOut();
+  QCOMPARE(canvas.zoom(), 1.25);
+  canvas.setZoom(1.3);
+  canvas.zoomIn();
+  QCOMPARE(canvas.zoom(), 1.5);
+  canvas.setZoom(0.15);
+  QVERIFY(canvas.canZoomOut());
+  canvas.zoomOut();
+  QCOMPARE(canvas.zoom(), bayan::DocumentCanvas::kMinimumZoom);
+  QVERIFY(!canvas.canZoomOut());
+  canvas.zoomOut();
+  QCOMPARE(canvas.zoom(), bayan::DocumentCanvas::kMinimumZoom);
+  canvas.zoomIn();
+  QCOMPARE(canvas.zoom(), 0.25);
+  canvas.setZoom(4.5);
+  QVERIFY(canvas.canZoomIn());
+  canvas.zoomIn();
+  QCOMPARE(canvas.zoom(), bayan::DocumentCanvas::kMaximumZoom);
+  QVERIFY(!canvas.canZoomIn());
+  canvas.zoomIn();
+  QCOMPARE(canvas.zoom(), bayan::DocumentCanvas::kMaximumZoom);
+  QCOMPARE(bayan::DocumentCanvas::kZoomSteps.front(), bayan::DocumentCanvas::kMinimumZoom);
+  QCOMPARE(bayan::DocumentCanvas::kZoomSteps.back(), bayan::DocumentCanvas::kMaximumZoom);
+  QVERIFY(std::ranges::is_sorted(bayan::DocumentCanvas::kZoomSteps));
 }
 
 void TestCanvas::tabLeavesTheCanvas() {

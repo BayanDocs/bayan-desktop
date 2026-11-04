@@ -10,7 +10,6 @@
 #include <QtGui/QGuiApplication>
 #include <QtGui/QInputMethod>
 #include <QtGui/QKeyEvent>
-#include <QtGui/QKeySequence>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QPointingDevice>
 #include <QtGui/QStyleHints>
@@ -20,6 +19,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <ranges>
 #include <utility>
 
 using namespace std::chrono_literals;
@@ -34,9 +34,12 @@ constexpr double kPrefetchShare = 0.5;
 constexpr int kMaxUploadsPerFrame = 8;
 // Logical pixels scrolled per line of a mouse wheel notch.
 constexpr double kWheelLineStep = 20.0;
-// Zoom factor per mouse wheel notch with Control held, and per press of Control+plus or minus.
+// Zoom factor per mouse wheel notch with Control held.
 constexpr double kZoomStep = 1.1;
-constexpr double kKeyZoomStep = 1.25;
+// Zooms closer than this count as equal when stepping through DocumentCanvas::kZoomSteps.
+constexpr double kZoomStepTolerance = 1e-9;
+// The share of the view's height that Page Up and Page Down scroll the document area by.
+constexpr double kPageScrollShare = 0.9;
 // The wheel's standard step (QWheelEvent::angleDelta for one notch).
 constexpr double kWheelNotch = 120.0;
 // Space kept around something revealed for a screen reader.
@@ -145,7 +148,13 @@ void DocumentCanvas::setSession(DocumentSession *session) {
     connect(session_, &DocumentSession::invalidated, this, &DocumentCanvas::onInvalidated);
     connect(session_, &DocumentSession::overlayChanged, this, &DocumentCanvas::onOverlayChanged);
     connect(session_, &DocumentSession::accessibilityChanged, this, &DocumentCanvas::onAccessibilityChanged);
-    connect(session_, &DocumentSession::statusChanged, this, [this] { viewChanged(); });
+    connect(session_, &DocumentSession::statusChanged, this, [this] {
+      if (session_->status() == DocumentSession::Status::Failed) {
+        // The session stopped using the engine for good (engine protocol §12.1): so does the tile thread.
+        renderer_.reset();
+      }
+      viewChanged();
+    });
     // A session destroyed first takes its engine's use with it: stop the tile thread at once (session_ is already null by then).
     connect(session_, &QObject::destroyed, this, [this] {
       renderer_.reset();
@@ -223,6 +232,24 @@ void DocumentCanvas::zoomAt(double zoom, QPointF itemPoint) {
   updateInputMethod(Qt::ImCursorRectangle | Qt::ImAnchorRectangle | Qt::ImFont);
 }
 
+void DocumentCanvas::zoomIn() {
+  for (const double step : kZoomSteps) {
+    if (step > zoom_ + kZoomStepTolerance) {
+      setZoom(step);
+      return;
+    }
+  }
+}
+
+void DocumentCanvas::zoomOut() {
+  for (const double step : kZoomSteps | std::views::reverse) {
+    if (step < zoom_ - kZoomStepTolerance) {
+      setZoom(step);
+      return;
+    }
+  }
+}
+
 void DocumentCanvas::commitZoom() {
   zoomSettle_.stop();
   if (tileZoom_ != zoom_) {
@@ -240,6 +267,43 @@ void DocumentCanvas::scrollSmoothlyBy(QPointF delta) {
   scrollAnimation_.setStartValue(contentPosition_);
   scrollAnimation_.setEndValue(target);
   scrollAnimation_.start();
+}
+
+bool DocumentCanvas::scrollWithKey(int key, int modifiers) {
+  // The keypad's navigation keys (without Num Lock) scroll too.
+  const Qt::KeyboardModifiers held =
+      Qt::KeyboardModifiers::fromInt(static_cast<Qt::KeyboardModifiers::Int>(modifiers)) & ~Qt::KeyboardModifiers(Qt::KeypadModifier);
+  const bool plain = held == Qt::NoModifier;
+  const bool control = held == Qt::ControlModifier;
+  switch (key) {
+  case Qt::Key_PageDown:
+  case Qt::Key_PageUp:
+    if (!plain) {
+      return false;
+    }
+    scrollSmoothlyBy({0, (key == Qt::Key_PageDown ? 1.0 : -1.0) * height() * kPageScrollShare});
+    return true;
+  case Qt::Key_Home:
+  case Qt::Key_End:
+    if (!plain && !control) {
+      return false;
+    }
+    scrollSmoothlyBy({0, key == Qt::Key_Home ? -contentHeight() : contentHeight()});
+    return true;
+  case Qt::Key_Up:
+  case Qt::Key_Down:
+  case Qt::Key_Left:
+  case Qt::Key_Right: {
+    if (!plain) {
+      return false;
+    }
+    const double step = key == Qt::Key_Up || key == Qt::Key_Left ? -kArrowScrollStep : kArrowScrollStep;
+    scrollSmoothlyBy(key == Qt::Key_Up || key == Qt::Key_Down ? QPointF(0, step) : QPointF(step, 0));
+    return true;
+  }
+  default:
+    return false;
+  }
 }
 
 void DocumentCanvas::setPageShadowColor(const QColor &color) {
@@ -730,47 +794,11 @@ void DocumentCanvas::reportCompleteness(bool complete) {
   }
 }
 
-bool DocumentCanvas::handleViewKey(const QKeyEvent &event) {
-  // View keys belong to the shell until the engine moves the caret through documents (Phase 2), which will then reveal the caret.
-  const bool control = event.modifiers().testFlag(Qt::ControlModifier);
-  const QPointF centre(width() / 2, height() / 2);
-  if (event.matches(QKeySequence::ZoomIn) || (control && event.key() == Qt::Key_Equal)) {
-    zoomAt(zoom_ * kKeyZoomStep, centre);
-    return true;
-  }
-  if (event.matches(QKeySequence::ZoomOut)) {
-    zoomAt(zoom_ / kKeyZoomStep, centre);
-    return true;
-  }
-  if (control && event.key() == Qt::Key_0) {
-    zoomAt(1.0, centre);
-    return true;
-  }
-  if (event.matches(QKeySequence::MoveToNextPage)) {
-    scrollSmoothlyBy({0, height() * 0.9});
-    return true;
-  }
-  if (event.matches(QKeySequence::MoveToPreviousPage)) {
-    scrollSmoothlyBy({0, -height() * 0.9});
-    return true;
-  }
-  if (event.matches(QKeySequence::MoveToStartOfDocument)) {
-    scrollSmoothlyBy({0, -contentPosition_.y()});
-    return true;
-  }
-  if (event.matches(QKeySequence::MoveToEndOfDocument)) {
-    scrollSmoothlyBy({0, contentHeight()});
-    return true;
-  }
-  return false;
-}
-
 void DocumentCanvas::keyPressEvent(QKeyEvent *event) {
-  if (handleViewKey(*event)) {
-    event->accept();
-    return;
-  }
-  // Tab moves the keyboard focus out of the canvas, so the keyboard never gets stuck in it (ADR-0020 §5).
+  // Every key but Tab goes to the engine, with its modifiers, as from the web shell: Page Up, Page Down, Home, End and the arrows, and
+  // Control with =, - or 0, which the shell no longer keeps for zooming (Control+= is Word's subscript). Tab moves the keyboard focus out
+  // of the canvas, so the keyboard never gets stuck in it (ADR-0020 §5); the document area before it scrolls with the keys, and the zoom
+  // buttons zoom.
   if (event->key() == Qt::Key_Tab || event->key() == Qt::Key_Backtab || session_ == nullptr || session_->documentId() <= 0) {
     event->ignore();
     return;

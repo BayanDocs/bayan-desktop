@@ -8,6 +8,9 @@
 // the DOM calls meta, so the two are swapped back.
 //
 // Typing a character sends both: input.key for the key press (the engine may treat it as a shortcut) and input.text for the character.
+// The canvas sends every key press this way except Tab, which moves the keyboard focus on: Page Up, Page Down, Home, End and the arrows
+// with their modifiers, as the web shell does, and shortcuts such as Control+= (Word's subscript), which the shell keeps for nothing of
+// its own (DocumentCanvas::keyPressEvent).
 
 #pragma once
 

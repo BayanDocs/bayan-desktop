@@ -12,6 +12,7 @@
 #include <QtTest/QSignalSpy>
 #include <QtTest/QTest>
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -86,14 +87,18 @@ private slots:
   void repliesMustAnswerPostedRequestsInOrder();
   void oversizedEngineMessagesAreRejected();
   void destroyingWhileBusyIsSafe();
+  void diagPanicNeedsTheTestSwitch();
+  void aPanicDiscardsTheSession();
+  void requestsOfOneTypeCanBeSentAsPanics();
 
 private:
-  // Starts an engine, completes the handshake and opens its document (the stub's test page or the real engine's mock document).
-  static std::unique_ptr<bayan::Engine> openedEngine();
+  // Starts an engine with a configuration, completes the handshake and opens its document (the stub's test page or the real engine's mock
+  // document).
+  static std::unique_ptr<bayan::Engine> openedEngine(const QJsonObject &config = {});
 };
 
-std::unique_ptr<bayan::Engine> TestEngine::openedEngine() {
-  auto engine = bayan::Engine::create();
+std::unique_ptr<bayan::Engine> TestEngine::openedEngine(const QJsonObject &config) {
+  auto engine = bayan::Engine::create(config);
   if (!engine) {
     return nullptr;
   }
@@ -364,6 +369,73 @@ void TestEngine::destroyingWhileBusyIsSafe() {
     engine.reset();
     QCoreApplication::processEvents();
   }
+}
+
+namespace {
+
+bool isUnrecoverableError(const QList<QVariant> &event) {
+  return event.at(0).toString() == u"engine.error"_s && event.at(1).toJsonObject().value(u"recoverable"_s) == QJsonValue(false);
+}
+
+} // namespace
+
+void TestEngine::diagPanicNeedsTheTestSwitch() {
+  // Without test.allow_panic, which the application never sets, diag.panic is refused and the session goes on (engine protocol §6.7).
+  const auto engine = openedEngine();
+  QVERIFY(engine);
+  QSignalSpy replies(engine.get(), &bayan::Engine::replyReceived);
+  QSignalSpy events(engine.get(), &bayan::Engine::eventReceived);
+  const QList<QVariant> refused = waitForReply(replies, engine->request(u"diag.panic"_s));
+  QVERIFY(!refused.isEmpty());
+  QVERIFY(!refused.at(1).toBool());
+  QCOMPARE(refused.at(3).toJsonObject().value(u"code"_s).toString(), u"not_allowed"_s);
+  const QList<QVariant> next = waitForReply(replies, engine->request(u"no.such.message"_s));
+  QVERIFY(!next.isEmpty());
+  QCOMPARE(next.at(3).toJsonObject().value(u"code"_s).toString(), u"unsupported_message"_s);
+  QVERIFY(std::ranges::none_of(events, isUnrecoverableError));
+}
+
+void TestEngine::aPanicDiscardsTheSession() {
+  // What the shell's recovery relies on, from the stub as from the real engine (engine protocol §12): the message that panicked is answered
+  // with the error panic, then engine.error says that the session is gone, and the next message other than hello needs a new handshake.
+  const auto engine = openedEngine(QJsonObject{{u"test"_s, QJsonObject{{u"allow_panic"_s, true}}}});
+  QVERIFY(engine);
+  QSignalSpy replies(engine.get(), &bayan::Engine::replyReceived);
+  QSignalSpy events(engine.get(), &bayan::Engine::eventReceived);
+  const QList<QVariant> reply = waitForReply(replies, engine->request(u"diag.panic"_s));
+  QVERIFY(!reply.isEmpty());
+  QVERIFY(!reply.at(1).toBool());
+  QCOMPARE(reply.at(3).toJsonObject().value(u"code"_s).toString(), u"panic"_s);
+  QTRY_VERIFY(std::ranges::any_of(events, isUnrecoverableError));
+  const QList<QVariant> after = waitForReply(replies, engine->request(u"doc.open"_s, QJsonObject{{u"blob"_s, 1}}));
+  QVERIFY(!after.isEmpty());
+  QCOMPARE(after.at(3).toJsonObject().value(u"code"_s).toString(), u"handshake_required"_s);
+  // Without an identifier, only the event says so.
+  QVERIFY(waitForReply(replies, engine->request(u"hello"_s, helloPayload())).value(1).toBool());
+  events.clear();
+  QVERIFY(engine->post(u"diag.panic"_s));
+  QTRY_VERIFY(std::ranges::any_of(events, isUnrecoverableError));
+}
+
+void TestEngine::requestsOfOneTypeCanBeSentAsPanics() {
+  // The recovery tests' hook: a request of the chosen type goes out as diag.panic with its own identifier, so the engine answers that very
+  // request with the error panic.
+  const auto engine = bayan::Engine::create(QJsonObject{{u"test"_s, QJsonObject{{u"allow_panic"_s, true}}}});
+  QVERIFY(engine);
+  QSignalSpy replies(engine.get(), &bayan::Engine::replyReceived);
+  QVERIFY(waitForReply(replies, engine->request(u"hello"_s, helloPayload())).value(1).toBool());
+  engine->setPanicOnRequestTypeForTesting(u"doc.open"_s);
+  const bayan::BlobId blob = engine->putBlob(QByteArray());
+  QVERIFY(blob != 0);
+  const QJsonObject open{{u"blob"_s, static_cast<qint64>(blob)}};
+  const QList<QVariant> panicked = waitForReply(replies, engine->request(u"doc.open"_s, open));
+  QVERIFY(!panicked.isEmpty());
+  QCOMPARE(panicked.at(3).toJsonObject().value(u"code"_s).toString(), u"panic"_s);
+  // Turned off, doc.open opens the document again, in a new session.
+  engine->setPanicOnRequestTypeForTesting({});
+  QVERIFY(waitForReply(replies, engine->request(u"hello"_s, helloPayload())).value(1).toBool());
+  QVERIFY(waitForReply(replies, engine->request(u"doc.open"_s, open)).value(1).toBool());
+  QVERIFY(engine->releaseBlob(blob));
 }
 
 QTEST_GUILESS_MAIN(TestEngine)

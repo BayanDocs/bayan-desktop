@@ -22,9 +22,18 @@ add_test(NAME app.canvas COMMAND tst_canvas)
 # The same at 125 % scaling, a fractional device pixel ratio as on many Windows laptops: tiles must still land on whole device pixels.
 add_test(NAME app.canvas_scale125 COMMAND tst_canvas)
 
+# Tests of the interface in QML (src/qml) around the canvas, against the engine the build links: the "Pages" item and its keys, the zoom
+# buttons and their announcements, plain text for engine strings, and what the interface does after engine failures (engine protocol §12.1).
+qt_add_executable(tst_interface tst_interface.cpp)
+# bayan_shellplugin is the QML module's static plugin; tst_interface.cpp imports it with Q_IMPORT_QML_PLUGIN, as main.cpp does.
+target_link_libraries(tst_interface PRIVATE bayan_shell bayan_shellplugin Qt6::Quick Qt6::QuickControls2 Qt6::Test bayan::compile_options)
+qt_import_plugins(tst_interface EXCLUDE_BY_TYPE permissions) # See src/CMakeLists.txt.
+bayan_deploy_engine_runtime(tst_interface)
+add_test(NAME app.interface COMMAND tst_interface)
+
 # Unit tests of the shell's pure logic, which needs no engine: the protocol parsers, the tile arithmetic and cache, the key and input-method
-# translation, and the accessible text.
-foreach(unit IN ITEMS protocol tiles input accessibletext)
+# translation, the accessible text, and the allowance of restarts after engine failures.
+foreach(unit IN ITEMS protocol tiles input accessibletext restartallowance)
   qt_add_executable(tst_${unit} tst_${unit}.cpp)
   target_link_libraries(tst_${unit} PRIVATE bayan_shell Qt6::Test bayan::compile_options)
   qt_import_plugins(tst_${unit} EXCLUDE_BY_TYPE permissions) # See src/CMakeLists.txt.
@@ -37,7 +46,7 @@ endforeach()
 add_test(NAME app.smoke COMMAND bayan-desktop --smoke-test)
 
 # Every test runs without a screen and with Qt's standard settings, whatever the developer's environment says.
-set_tests_properties(engine.wrapper app.document_session app.canvas app.smoke PROPERTIES
+set_tests_properties(engine.wrapper app.document_session app.canvas app.interface app.smoke PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1"
   TIMEOUT 120)
 set_tests_properties(app.canvas_scale125 PROPERTIES
