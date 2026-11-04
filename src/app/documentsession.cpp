@@ -359,9 +359,6 @@ void DocumentSession::recover() {
 }
 
 void DocumentSession::forgetSession(bool closesDocument) {
-  if (closesDocument) {
-    emit documentClosed();
-  }
   releaseDocumentBlob();
   welcomed_ = false;
   openWhenWelcomed_ = false;
@@ -373,6 +370,12 @@ void DocumentSession::forgetSession(bool closesDocument) {
   viewRequests_.clear();
   // The next document gets its own view.set.
   sentView_.reset();
+  // Only now that the document is forgotten, so that nothing more can be sent for it: the interface then moves keyboard focus off the
+  // canvas, which ends an input-method composition in progress, and that must not reach the engine that failed (engine protocol §12.1,
+  // point 1). Still before the pages and the status change, so that the canvas is visible while the focus moves.
+  if (closesDocument) {
+    emit documentClosed();
+  }
   if (!pages_.empty()) {
     pages_.clear();
     emit pagesChanged();

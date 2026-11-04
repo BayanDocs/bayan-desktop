@@ -148,6 +148,10 @@ void Benchmark::waitForDocument() {
     fail(u"the engine session failed"_s);
     return;
   }
+  if (session_.status() == DocumentSession::Status::Closed) {
+    fail(u"no document is open: the engine refused it, or failed and was restarted"_s);
+    return;
+  }
   const QList<QObject *> roots = qml_.rootObjects();
   window_ = roots.isEmpty() ? nullptr : qobject_cast<QQuickWindow *>(roots.constFirst());
   canvas_ = window_ == nullptr ? nullptr : window_->findChild<DocumentCanvas *>(u"documentCanvas"_s);

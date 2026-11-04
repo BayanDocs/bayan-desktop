@@ -32,9 +32,17 @@ Rectangle {
     Connections {
         target: area.session
 
-        // Sent before the canvas disappears with the document (engine protocol §12.1, point 3).
+        // Sent once the session has forgotten the document, before the canvas disappears with it: a hidden canvas would keep the keyboard
+        // focus, and keys would go to a document that is no longer there (engine protocol §12.1, point 3).
         function onDocumentClosed() {
             if (canvas.activeFocus)
+                area.forceActiveFocus(Qt.OtherFocusReason);
+        }
+
+        // The offer goes when the user takes it and at the stop (engine protocol §12.1, point 3). Keyboard focus on its button then moves
+        // to the Pages, because a button that is hidden keeps the focus, and the next key would reach a control nobody sees (ADR-0020 §5).
+        function onOfferChanged() {
+            if (area.session.offer === DocumentSession.Offer.None && offerButton.activeFocus)
                 area.forceActiveFocus(Qt.OtherFocusReason);
         }
 
@@ -162,6 +170,8 @@ Rectangle {
         }
 
         Button {
+            id: offerButton
+
             objectName: "offerButton"
             anchors.horizontalCenter: parent.horizontalCenter
             visible: area.session.offer !== DocumentSession.Offer.None

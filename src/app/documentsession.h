@@ -131,7 +131,8 @@ signals:
   // A new message, also one with the same text as the last, so that each one is announced.
   void messageChanged();
   void offerChanged();
-  // A failure is about to close the document that was open, or being opened; sent before the pages and the status change.
+  // A failure closed the document that was open, or being opened: the session has forgotten it and sends nothing more for it. Sent before
+  // the pages and the status change, so that the interface can move keyboard focus while the canvas is still shown.
   void documentClosed();
   void pagesChanged();
   // The engine changed these regions while handling request cause; tiles rendered before that request was handled are out of date.

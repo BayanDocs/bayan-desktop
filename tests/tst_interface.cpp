@@ -8,6 +8,7 @@
 #include "documentsession.h"
 #include "engine.h"
 
+#include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
 #include <QtCore/QJsonObject>
 #include <QtCore/QTemporaryDir>
@@ -15,6 +16,7 @@
 #include <QtGui/QAccessible>
 #include <QtGui/QColor>
 #include <QtGui/QImage>
+#include <QtGui/QInputMethodEvent>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
 #include <QtQml/QQmlExtensionPlugin>
@@ -167,6 +169,8 @@ private slots:
   void everyTextOfTheInterfaceIsPlainText();
   void markupInAnEngineStringIsShownAsPlainText();
   void failuresAreShownAndAnnouncedAndKeepFocusInThePages();
+  void aCompositionInProgressNeverReachesAFailedEngine();
+  void focusOnTheOfferGoesToThePagesWhenTheOfferGoes();
 };
 
 void TestInterface::initTestCase() {
@@ -249,13 +253,16 @@ void TestInterface::zoomButtonsZoomAndAnnounceTheLevel() {
   QCOMPARE(ui->canvas->zoom(), 1.1);
   QCOMPARE(level->property("text").toString(), u"Zoom 110 %"_s);
   QCOMPARE(Announcements::messages(), QStringList{u"Zoom 110 %"_s});
-  // From the keyboard: Tab reaches the buttons, and Space presses them.
+  // From the keyboard: Tab reaches the buttons, which show the focus (visualFocus, ADR-0020 §5), and Space presses them.
   zoomOut->forceActiveFocus(Qt::TabFocusReason);
+  QVERIFY(zoomOut->property("visualFocus").toBool());
   QTest::keyClick(ui->window, Qt::Key_Space);
   QCOMPARE(ui->canvas->zoom(), 1.0);
   QCOMPARE(Announcements::messages().last(), u"Zoom 100 %"_s);
   QTest::keyClick(ui->window, Qt::Key_Tab);
   QTRY_VERIFY(zoomIn->hasActiveFocus());
+  QVERIFY(zoomIn->property("visualFocus").toBool());
+  QVERIFY(!zoomOut->property("visualFocus").toBool());
   // Up to 500 %, where Zoom in is disabled and hands the keyboard focus to Zoom out instead of losing it.
   for (int press = 0; press < 7; ++press) {
     QTest::keyClick(ui->window, Qt::Key_Space);
@@ -264,6 +271,7 @@ void TestInterface::zoomButtonsZoomAndAnnounceTheLevel() {
   QCOMPARE(Announcements::messages().last(), u"Zoom 500 %"_s);
   QVERIFY(!zoomIn->isEnabled());
   QTRY_VERIFY(zoomOut->hasActiveFocus());
+  QVERIFY(zoomOut->property("visualFocus").toBool());
   QTest::keyClick(ui->window, Qt::Key_Space);
   QCOMPARE(ui->canvas->zoom(), 4.0);
   QVERIFY(zoomIn->isEnabled());
@@ -346,6 +354,7 @@ void TestInterface::failuresAreShownAndAnnouncedAndKeepFocusInThePages() {
   // The user takes the offer from the keyboard: the document is reopened and the keyboard focus goes into it, since the button is gone.
   QTest::keyClick(ui->window, Qt::Key_Tab);
   QTRY_VERIFY(offer->hasActiveFocus());
+  QVERIFY(offer->property("visualFocus").toBool());
   QTest::keyClick(ui->window, Qt::Key_Space);
   QTRY_COMPARE(ui->session->status(), Status::Ready);
   QTRY_VERIFY(ui->canvas->hasActiveFocus());
@@ -369,6 +378,70 @@ void TestInterface::failuresAreShownAndAnnouncedAndKeepFocusInThePages() {
   QVERIFY(ui->pages->hasActiveFocus());
   QCOMPARE(status->property("text").toString(), u"Engine stopped"_s);
   QCOMPARE(Announcements::messages().mid(3), (QStringList{restarted(2, closedNow), restarted(3, stillClosed), stoppedAgain}));
+}
+
+void TestInterface::aCompositionInProgressNeverReachesAFailedEngine() {
+  // When a failure closes the document, keyboard focus leaves the canvas, which ends an input-method composition in progress. By then the
+  // session has forgotten the document, so the composition goes nowhere: after a restart only the new hello reaches the engine, and after
+  // the stop nothing does (engine protocol §12.1, point 1).
+  const auto ui = openInterface(allowPanic());
+  QVERIFY(ui);
+  bayan::Engine &engine = *ui->engine;
+  // The input method starts composing "あ" in the document, as a Japanese input method does with the first key.
+  const auto compose = [&ui] {
+    QInputMethodEvent preedit(u"あ"_s, {QInputMethodEvent::Attribute(QInputMethodEvent::Cursor, 1, 1, QVariant())});
+    QCoreApplication::sendEvent(ui->canvas, &preedit);
+    return ui->canvas->composing();
+  };
+  for (int restart = 1; restart <= 3; ++restart) {
+    QVERIFY(compose());
+    const qint64 before = engine.lastPostedRequest();
+    QVERIFY(engine.post(u"diag.panic"_s));
+    QTRY_COMPARE(ui->session->message(), restarted(restart, closedNow));
+    QTRY_VERIFY(ui->pages->hasActiveFocus());
+    QVERIFY(!ui->canvas->composing());
+    QTest::qWait(200);
+    QCOMPARE(engine.lastPostedRequest(), before + 1); // The new session's hello, nothing else.
+    ui->session->reopen();
+    QTRY_COMPARE(ui->session->status(), Status::Ready);
+    ui->canvas->forceActiveFocus(Qt::MouseFocusReason);
+    QTRY_VERIFY(ui->canvas->hasActiveFocus());
+  }
+  QVERIFY(compose());
+  const qint64 before = engine.lastPostedRequest();
+  QVERIFY(engine.post(u"diag.panic"_s));
+  QTRY_COMPARE(ui->session->status(), Status::Failed);
+  QVERIFY(!ui->canvas->composing());
+  QTest::qWait(200);
+  QCOMPARE(engine.lastPostedRequest(), before);
+}
+
+void TestInterface::focusOnTheOfferGoesToThePagesWhenTheOfferGoes() {
+  // The offer goes at the stop. Keyboard focus on its button then moves to the Pages: a hidden button would keep it, and the next key would
+  // reach an invisible control (ADR-0020 §5, visible focus).
+  const auto ui = openInterface(allowPanic());
+  QVERIFY(ui);
+  bayan::Engine &engine = *ui->engine;
+  QQuickItem *offer = ui->item(u"offerButton"_s);
+  QVERIFY(offer != nullptr);
+  QVERIFY(engine.post(u"diag.panic"_s));
+  QTRY_COMPARE(ui->session->message(), restarted(1, closedNow));
+  QTRY_VERIFY(ui->pages->hasActiveFocus());
+  QTest::keyClick(ui->window, Qt::Key_Tab);
+  QTRY_VERIFY(offer->hasActiveFocus());
+  QVERIFY(offer->property("visualFocus").toBool());
+  // Failures while the offer has the focus: the offer stays, and so does the focus.
+  for (int restart = 2; restart <= 3; ++restart) {
+    QVERIFY(engine.post(u"diag.panic"_s));
+    QTRY_COMPARE(ui->session->message(), restarted(restart, stillClosed));
+    QVERIFY(offer->isVisible());
+    QVERIFY(offer->hasActiveFocus());
+  }
+  QVERIFY(engine.post(u"diag.panic"_s));
+  QTRY_COMPARE(ui->session->status(), Status::Failed);
+  QVERIFY(!offer->isVisible());
+  QTRY_COMPARE(ui->window->activeFocusItem(), ui->pages);
+  QVERIFY(!offer->hasActiveFocus());
 }
 
 QTEST_MAIN(TestInterface)
