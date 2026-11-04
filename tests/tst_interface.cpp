@@ -11,6 +11,7 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
 #include <QtCore/QJsonObject>
+#include <QtCore/QJsonValue>
 #include <QtCore/QTemporaryDir>
 #include <QtCore/QUrl>
 #include <QtGui/QAccessible>
@@ -86,6 +87,9 @@ struct Interface {
   QQuickWindow *window = nullptr;
   QQuickItem *pages = nullptr;
   bayan::DocumentCanvas *canvas = nullptr;
+  // The last request posted when the session received the latest unrecoverable engine.error, just before it handled it: requests up to
+  // this one were sent while the session still had its document, as it may until it learns of the failure.
+  qint64 postedBeforeFailure = -1;
 
   Interface() = default;
   Interface(const Interface &) = delete;
@@ -108,6 +112,13 @@ std::unique_ptr<Interface> openInterface(const QJsonObject &config = {}) {
   if (!ui->engine) {
     return nullptr;
   }
+  // Connected before the session's own connection, so that it runs first.
+  QObject::connect(ui->engine.get(), &bayan::Engine::eventReceived, ui->engine.get(),
+                   [raw = ui.get()](const QString &type, const QJsonObject &payload) {
+                     if (type == u"engine.error"_s && payload.value(u"recoverable"_s) != QJsonValue(true)) {
+                       raw->postedBeforeFailure = raw->engine->lastPostedRequest();
+                     }
+                   });
   ui->session = std::make_unique<bayan::DocumentSession>(*ui->engine);
   ui->qml = std::make_unique<QQmlApplicationEngine>();
   ui->qml->setInitialProperties({{u"session"_s, QVariant::fromValue(ui->session.get())}});
@@ -393,27 +404,30 @@ void TestInterface::aCompositionInProgressNeverReachesAFailedEngine() {
     QCoreApplication::sendEvent(ui->canvas, &preedit);
     return ui->canvas->composing();
   };
+  // Requests the session sends before the failure reaches it, such as a view.set, still belong to the live session; the test counts from
+  // the moment the session receives the engine.error.
   for (int restart = 1; restart <= 3; ++restart) {
     QVERIFY(compose());
-    const qint64 before = engine.lastPostedRequest();
     QVERIFY(engine.post(u"diag.panic"_s));
     QTRY_COMPARE(ui->session->message(), restarted(restart, closedNow));
     QTRY_VERIFY(ui->pages->hasActiveFocus());
     QVERIFY(!ui->canvas->composing());
     QTest::qWait(200);
-    QCOMPARE(engine.lastPostedRequest(), before + 1); // The new session's hello, nothing else.
+    QVERIFY(ui->postedBeforeFailure > 0);
+    QCOMPARE(engine.lastPostedRequest(), ui->postedBeforeFailure + 1); // The new session's hello, nothing else.
     ui->session->reopen();
     QTRY_COMPARE(ui->session->status(), Status::Ready);
     ui->canvas->forceActiveFocus(Qt::MouseFocusReason);
     QTRY_VERIFY(ui->canvas->hasActiveFocus());
   }
   QVERIFY(compose());
-  const qint64 before = engine.lastPostedRequest();
+  const qint64 previous = ui->postedBeforeFailure;
   QVERIFY(engine.post(u"diag.panic"_s));
   QTRY_COMPARE(ui->session->status(), Status::Failed);
   QVERIFY(!ui->canvas->composing());
   QTest::qWait(200);
-  QCOMPARE(engine.lastPostedRequest(), before);
+  QVERIFY(ui->postedBeforeFailure > previous);
+  QCOMPARE(engine.lastPostedRequest(), ui->postedBeforeFailure); // Nothing at all.
 }
 
 void TestInterface::focusOnTheOfferGoesToThePagesWhenTheOfferGoes() {
