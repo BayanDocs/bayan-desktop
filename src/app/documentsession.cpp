@@ -33,10 +33,16 @@ DocumentSession::DocumentSession(Engine &engine, QObject *parent) : QObject(pare
 DocumentSession::~DocumentSession() { releaseDocumentBlob(); }
 
 void DocumentSession::start() {
+  openWhenWelcomed_ = true;
+  startSession();
+}
+
+void DocumentSession::startSession() {
   const QJsonObject shell{
       {u"name"_s, u"bayan-desktop"_s}, {u"version"_s, QCoreApplication::applicationVersion()}, {u"platform"_s, QSysInfo::productType()}};
   // The canvas forwards input-method composition and bridges the accessibility tree to the platform (DESK-002); no clipboard yet.
   const QJsonObject capabilities{{u"clipboard_formats"_s, QJsonArray{}}, {u"ime"_s, true}, {u"accessibility"_s, true}};
+  welcomed_ = false;
   helloRequest_ = engine_.request(u"hello"_s, QJsonObject{{u"protocol_versions"_s, QJsonArray{Engine::kProtocolVersion}},
                                                           {u"shell"_s, shell},
                                                           {u"capabilities"_s, capabilities},
@@ -44,6 +50,22 @@ void DocumentSession::start() {
                                                           {u"theme"_s, themeName()}});
   if (helloRequest_ == 0) {
     fail();
+  }
+}
+
+void DocumentSession::reopen() {
+  if (status_ == Status::Failed || offer_ == Offer::None) {
+    return;
+  }
+  taken_ = offer_;
+  setOffer(Offer::None);
+  setStatus(Status::Starting);
+  setMessage(taken_ == Offer::Reopen ? tr("Reopening the document…") : tr("Opening the document…"));
+  if (welcomed_) {
+    openDocument();
+  } else {
+    // The new session's welcome has not arrived yet; doc.open follows it.
+    openWhenWelcomed_ = true;
   }
 }
 
@@ -56,34 +78,30 @@ qint64 DocumentSession::currentCause() const {
 
 void DocumentSession::onReply(qint64 requestId, bool ok, const QJsonObject &payload, const QJsonObject &error) {
   lastReply_ = requestId;
-  if (status_ == Status::Failed) {
+  // Nothing after the stop, and nothing for an earlier session: a request sent before this session's hello was answered by the session the
+  // engine discarded, or with handshake_required by this one before its handshake (engine protocol §12.1, point 4).
+  if (status_ == Status::Failed || requestId < helloRequest_) {
+    return;
+  }
+  // The engine panicked while handling the request. It has discarded its session, and the engine.error that follows decides what happens
+  // (§12.1, point 4), so the reply itself changes nothing, except that the engine is done with the document's bytes; a document whose
+  // doc.open it answers still counts as being opened until the engine.error closes it (§12.1, point 3). The code is read only to recognise
+  // the reply; nothing of the error is shown.
+  if (!ok && error.value(u"code"_s).toString() == u"panic"_s) {
+    if (requestId == openRequest_) {
+      openRequest_ = 0;
+      releaseDocumentBlob();
+    }
     return;
   }
   if (requestId == helloRequest_) {
-    if (!ok) {
-      fail();
-      return;
-    }
-    engineVersion_ = payload.value(u"engine_version"_s).toString();
-    features_.clear();
-    for (const auto &feature : payload.value(u"features"_s).toArray()) {
-      features_.append(feature.toString());
-    }
-    emit statusChanged();
-    // Placeholder until opening and creating documents exist: an empty blob stands for a new blank document. The v0 engine opens its
-    // mock document whatever the blob holds, and the stub engine its test page.
-    documentBlob_ = engine_.putBlob(QByteArray());
-    openRequest_ = documentBlob_ == 0 ? 0 : engine_.request(u"doc.open"_s, QJsonObject{{u"blob"_s, static_cast<qint64>(documentBlob_)}});
-    if (openRequest_ == 0) {
+    if (ok) {
+      onWelcome(payload);
+    } else {
       fail();
     }
   } else if (requestId == openRequest_) {
-    releaseDocumentBlob();
-    if (!ok) {
-      fail();
-      return;
-    }
-    onOpened(payload);
+    onOpenReply(ok, payload);
   } else if (const auto view = std::ranges::find(viewRequests_, requestId); view != viewRequests_.end()) {
     viewRequests_.erase(view);
     if (!ok) {
@@ -102,6 +120,47 @@ void DocumentSession::onReply(qint64 requestId, bool ok, const QJsonObject &payl
   } else if (!ok) {
     emit inputRefused(error.value(u"code"_s).toString());
   }
+}
+
+void DocumentSession::onOpenReply(bool ok, const QJsonObject &payload) {
+  openRequest_ = 0;
+  opening_ = false;
+  releaseDocumentBlob();
+  if (!ok) {
+    // The engine refused the document and kept its session: there is nothing to restart, and nothing is offered.
+    taken_ = Offer::None;
+    setStatus(Status::Closed);
+    setMessage(tr("The document could not be opened."));
+    return;
+  }
+  onOpened(payload);
+}
+
+void DocumentSession::onWelcome(const QJsonObject &payload) {
+  welcomed_ = true;
+  engineVersion_ = payload.value(u"engine_version"_s).toString();
+  features_.clear();
+  for (const auto &feature : payload.value(u"features"_s).toArray()) {
+    features_.append(feature.toString());
+  }
+  emit statusChanged();
+  if (openWhenWelcomed_) {
+    openDocument();
+  }
+}
+
+void DocumentSession::openDocument() {
+  openWhenWelcomed_ = false;
+  // Placeholder until opening and creating documents exist: an empty blob stands for a new blank document. The v0 engine opens its mock
+  // document whatever the blob holds, and the stub engine its test page.
+  documentBlob_ = engine_.putBlob(QByteArray());
+  openRequest_ = documentBlob_ == 0 ? 0 : engine_.request(u"doc.open"_s, QJsonObject{{u"blob"_s, static_cast<qint64>(documentBlob_)}});
+  if (openRequest_ == 0) {
+    fail();
+    return;
+  }
+  opening_ = true;
+  setStatus(Status::Starting);
 }
 
 void DocumentSession::onOpened(const QJsonObject &payload) {
@@ -144,8 +203,9 @@ void DocumentSession::sendView() {
 
 void DocumentSession::onEvent(const QString &type, const QJsonObject &payload) {
   if (type == u"engine.error"_s) {
+    // Only recoverable decides, and anything but true means that the engine discarded its session (engine protocol §12.1).
     if (!payload.value(u"recoverable"_s).toBool(false)) {
-      fail();
+      recover();
     }
     return;
   }
@@ -182,8 +242,11 @@ void DocumentSession::setPages(const QJsonObject &payload) {
     emit pagesChanged();
   }
   if (status_ == Status::Starting && !pages_.empty()) {
-    status_ = Status::Ready;
-    emit statusChanged();
+    setStatus(Status::Ready);
+    if (taken_ != Offer::None) {
+      setMessage(taken_ == Offer::Reopen ? tr("The document was reopened.") : tr("The document was opened."));
+      taken_ = Offer::None;
+    }
   }
 }
 
@@ -262,11 +325,103 @@ qint64 DocumentSession::sendPointer(const protocol::PointerInput &pointer) {
   return sendForDocument(u"input.pointer"_s, protocol::pointerPayload(pointer));
 }
 
-void DocumentSession::fail() {
+void DocumentSession::recover() {
+  if (status_ == Status::Failed || helloRequest_ == 0) {
+    // Stopped already, or never started: there is no session to recover.
+    return;
+  }
+  // What the failure closed decides the message and the offer (engine protocol §12.1, points 2 and 3): the document that was open or being
+  // opened can be reopened, as can one a failure closed earlier while it is still closed (the offer stays, also when the user took it but
+  // its doc.open has not gone out yet); otherwise the document was never open, and can be opened now.
+  const bool closed = documentId_ > 0 || opening_;
+  const Offer pending = offer_ != Offer::None ? offer_ : taken_;
+  const Offer offer = closed || pending == Offer::Reopen ? Offer::Reopen : Offer::Open;
+  forgetSession(closed);
+  const std::optional<int> restart = restarts_.take();
+  if (!restart) {
+    stop(tr("The engine stopped working again, so it was not restarted. Close BayanDocs and open it again to restart the engine."));
+    return;
+  }
+  QString documentState;
+  if (closed) {
+    documentState = tr("The document was closed and can be reopened.");
+  } else if (offer == Offer::Reopen) {
+    documentState = tr("The document is still closed and can be reopened.");
+  } else {
+    documentState = tr("The document can be opened now.");
+  }
+  setOffer(offer);
+  setStatus(Status::Closed);
+  setMessage(tr("The engine stopped working and was restarted (%1 of %2). %3")
+                 .arg(QString::number(*restart), QString::number(RestartAllowance::kMaxRestarts), documentState));
+  // A new session, without the document: doc.open waits for the user (§12.1, point 3).
+  startSession();
+}
+
+void DocumentSession::forgetSession(bool closesDocument) {
   releaseDocumentBlob();
-  if (status_ != Status::Failed) {
-    status_ = Status::Failed;
+  welcomed_ = false;
+  openWhenWelcomed_ = false;
+  opening_ = false;
+  taken_ = Offer::None;
+  documentId_ = 0;
+  openRequest_ = 0;
+  accessibilityRequest_ = 0;
+  viewRequests_.clear();
+  // The next document gets its own view.set.
+  sentView_.reset();
+  // Only now that the document is forgotten, so that nothing more can be sent for it: the interface then moves keyboard focus off the
+  // canvas, which ends an input-method composition in progress, and that must not reach the engine that failed (engine protocol §12.1,
+  // point 1). Still before the pages and the status change, so that the canvas is visible while the focus moves.
+  if (closesDocument) {
+    emit documentClosed();
+  }
+  if (!pages_.empty()) {
+    pages_.clear();
+    emit pagesChanged();
+  }
+  if (overlay_ != protocol::Overlay{}) {
+    overlay_ = {};
+    emit overlayChanged();
+  }
+  if (accessibilityTree_ || accessibilityCaret_) {
+    accessibilityTree_.reset();
+    accessibilityCaret_.reset();
+    emit accessibilityChanged({});
+  }
+}
+
+void DocumentSession::fail() {
+  if (status_ == Status::Failed) {
+    return;
+  }
+  forgetSession(documentId_ > 0 || opening_);
+  stop(tr("The engine stopped. Close BayanDocs and open it again to restart the engine."));
+}
+
+void DocumentSession::stop(const QString &message) {
+  // The offer goes at the stop (engine protocol §12.1, point 3), and nothing more is sent to the engine.
+  setOffer(Offer::None);
+  setStatus(Status::Failed);
+  setMessage(message);
+}
+
+void DocumentSession::setStatus(Status status) {
+  if (status != status_) {
+    status_ = status;
     emit statusChanged();
+  }
+}
+
+void DocumentSession::setMessage(const QString &message) {
+  message_ = message;
+  emit messageChanged();
+}
+
+void DocumentSession::setOffer(Offer offer) {
+  if (offer != offer_) {
+    offer_ = offer;
+    emit offerChanged();
   }
 }
 

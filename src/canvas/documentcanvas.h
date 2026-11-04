@@ -4,12 +4,15 @@
 //   ViewGeometry), asks the tile thread to render them (TileRenderer), keeps them (TileCache) and puts them into Qt Quick's scene graph as
 //   textures, each uploaded once and moved, not redrawn, while the view scrolls. Tiles land on whole device pixels, so they stay sharp at
 //   fractional scaling on Windows and on Retina screens.
-// - Zoom: while the zoom changes (pinch, Control+wheel, Control+plus and minus), the canvas stretches the tiles it has, and once the zoom
-//   has settled it asks for tiles at the new zoom, showing the stretched ones until the new ones arrive.
+// - Zoom: while the zoom changes (pinch, Control+wheel, the Zoom in and Zoom out buttons), the canvas stretches the tiles it has, and once
+//   the zoom has settled it asks for tiles at the new zoom, showing the stretched ones until the new ones arrive.
 // - Overlays: the caret and the selection come from overlay.update and are drawn over the tiles; the caret blinks here, so blinking never
 //   re-renders a page (architecture §8).
 // - Input: keys, pointer events and input-method composition go to the engine as input messages (KeyMapping, ImeTranslator), and the
-//   input method learns the caret's position and the text around it from the engine's overlay and accessibility tree.
+//   input method learns the caret's position and the text around it from the engine's overlay and accessibility tree. Every key but Tab
+//   goes to the engine, with its modifiers: the shell binds none, so that it hides no Word shortcut (Control+= is subscript), and the
+//   engine receives the same keys from both shells (engine protocol §6.5). The keyboard scrolls and zooms through the document area
+//   instead (DocumentArea.qml and Main.qml, with scrollWithKey, zoomIn and zoomOut), so both stay keyboard-operable (ADR-0020 §5).
 // - Accessibility: CanvasAccessible presents the engine's accessibility tree to screen readers; the canvas keeps its text (AccessibleText)
 //   and reports changes of the text and the caret.
 //
@@ -34,6 +37,7 @@
 #include <QtQml/qqmlregistration.h>
 #include <QtQuick/QQuickItem>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -77,6 +81,8 @@ class DocumentCanvas : public QQuickItem {
   Q_PROPERTY(double contentWidth READ contentWidth NOTIFY contentSizeChanged FINAL)
   Q_PROPERTY(double contentHeight READ contentHeight NOTIFY contentSizeChanged FINAL)
   Q_PROPERTY(bool tilesComplete READ tilesComplete NOTIFY tilesCompleteChanged FINAL)
+  Q_PROPERTY(bool canZoomIn READ canZoomIn NOTIFY zoomChanged FINAL)
+  Q_PROPERTY(bool canZoomOut READ canZoomOut NOTIFY zoomChanged FINAL)
   Q_PROPERTY(QColor pageShadowColor READ pageShadowColor WRITE setPageShadowColor NOTIFY colorsChanged FINAL)
   Q_PROPERTY(QColor pagePlaceholderColor READ pagePlaceholderColor WRITE setPagePlaceholderColor NOTIFY colorsChanged FINAL)
   Q_PROPERTY(QColor caretColor READ caretColor WRITE setCaretColor NOTIFY colorsChanged FINAL)
@@ -86,6 +92,11 @@ public:
   // Zoom from 10 % to 500 %, as Word offers (the engine accepts 5 % to 6,400 %).
   static constexpr double kMinimumZoom = 0.1;
   static constexpr double kMaximumZoom = 5.0;
+  // The zooms that zoomIn and zoomOut step through: the web shell's zoom steps (bayan-web's document-controller.ts), and the canvas's
+  // smallest zoom, 10 %, below them.
+  static constexpr std::array kZoomSteps{0.1, 0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0, 3.0, 4.0, 5.0};
+  // How far the arrow keys scroll the document area, in logical pixels.
+  static constexpr double kArrowScrollStep = 40.0;
 
   explicit DocumentCanvas(QQuickItem *parent = nullptr);
   // Stops the tile thread. The session and its engine must outlive the canvas, or the canvas's session must be cleared first.
@@ -118,11 +129,20 @@ public:
 
   // Zooms so that the document point under itemPoint stays under it (pinch, Control+wheel).
   Q_INVOKABLE void zoomAt(double zoom, QPointF itemPoint);
+  // Zooms to the next step of kZoomSteps above or below the current zoom, around the canvas's centre (the Zoom in and Zoom out buttons).
+  Q_INVOKABLE void zoomIn();
+  Q_INVOKABLE void zoomOut();
+  [[nodiscard]] bool canZoomIn() const { return zoom_ < kMaximumZoom; }
+  [[nodiscard]] bool canZoomOut() const { return zoom_ > kMinimumZoom; }
   // Asks for tiles at the current zoom now instead of after the zoom has settled, for example at the end of a pinch.
   Q_INVOKABLE void commitZoom();
   Q_INVOKABLE void scrollBy(double dx, double dy) { setContentPosition(contentPosition_ + QPointF(dx, dy)); }
   // Scrolls with a short animation, as for a mouse wheel's notches and the Page Up and Page Down keys.
   void scrollSmoothlyBy(QPointF delta);
+  // Scrolls for a key pressed while the document area, the "Pages" item (DocumentArea.qml), has the keyboard focus, as a browser scrolls a
+  // focused scroller: Page Up and Page Down by most of the view, Home and End (also with Control) to the top and the bottom, and the arrow
+  // keys by kArrowScrollStep. key and modifiers are Qt::Key and Qt::KeyboardModifiers values. Returns whether the key was one of those.
+  Q_INVOKABLE bool scrollWithKey(int key, int modifiers);
 
   // The current view: zoom, scroll position and where the pages are.
   [[nodiscard]] ViewGeometry geometry() const;
@@ -216,7 +236,6 @@ private:
   void restartCaretBlink();
   void updateInputMethod(Qt::InputMethodQueries queries) const;
   [[nodiscard]] std::optional<EditContext> editContext() const;
-  [[nodiscard]] bool handleViewKey(const QKeyEvent &event);
   void pointerPressed(QMouseEvent *event);
   void sendPointer(protocol::PointerKind kind, const QMouseEvent &event);
   void performImeAction(const ImeAction &action);

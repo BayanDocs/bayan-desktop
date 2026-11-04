@@ -66,7 +66,11 @@ bool Engine::post(const QString &type, const QJsonObject &payload) {
 
 qint64 Engine::request(const QString &type, const QJsonObject &payload) {
   const qint64 id = nextRequestId_++;
-  if (!send(QJsonObject{{u"v"_s, kProtocolVersion}, {u"id"_s, id}, {u"type"_s, type}, {u"payload"_s, payload}})) {
+  const bool panic = !panicOnRequestType_.isEmpty() && type == panicOnRequestType_;
+  if (!send(QJsonObject{{u"v"_s, kProtocolVersion},
+                        {u"id"_s, id},
+                        {u"type"_s, panic ? u"diag.panic"_s : type},
+                        {u"payload"_s, panic ? QJsonObject() : payload}})) {
     return 0;
   }
   // Published only after the engine has queued the message, so a thread that reads it and then renders a tile is ordered after it.

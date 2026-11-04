@@ -27,6 +27,8 @@ qt_add_qml_module(bayan_shell
     app/documentsession.h
     app/pixelprobe.cpp
     app/pixelprobe.h
+    app/restartallowance.cpp
+    app/restartallowance.h
     canvas/canvasnode.cpp
     canvas/canvasnode.h
     canvas/documentcanvas.cpp

@@ -82,6 +82,12 @@ public:
   // that tests can play the engine thread.
   void deliverFromEngineThread(const std::uint8_t *json, std::size_t length) noexcept;
 
+  // For the tests of the recovery after an engine failure (engine protocol §12.1): sends every later request of this type as diag.panic,
+  // with the same identifier and no payload, so that an engine created with test.allow_panic fails while handling it and answers that very
+  // request with the error panic, as it would for a document that makes it fail whenever it opens. An empty type turns this off. The
+  // application never calls it, and an engine without test.allow_panic refuses diag.panic.
+  void setPanicOnRequestTypeForTesting(const QString &type) { panicOnRequestType_ = type; }
+
 signals:
   // An answer to request(). On success, ok is true and payload holds the answer; otherwise error holds { code, message_id, args }. Replies
   // arrive in the order of their requests; one that answers no request posted, or comes out of order, is a protocolError instead.
@@ -107,6 +113,8 @@ private:
   qint64 lastReply_ = 0;
   // Messages that could not be copied on the engine thread (out of memory); reported with the next message that arrives.
   std::atomic<int> lostMessages_{0};
+  // See setPanicOnRequestTypeForTesting.
+  QString panicOnRequestType_;
 };
 
 } // namespace bayan

@@ -1,6 +1,7 @@
 // Unit tests for the document session (src/app/documentsession.h), against the engine the build links: the stub engine (BAYAN_ENGINE=stub)
 // or the real engine of bayan-core's C SDK (BAYAN_ENGINE=sdk). The error paths of opening a document need the stub's test switches, and the
-// accessibility tree and text input need the real engine's mock document; each of those tests skips with the other engine.
+// accessibility tree and text input need the real engine's mock document; each of those tests skips with the other engine. The recovery
+// after engine failures (engine protocol §12.1) runs against both: both engines panic on diag.panic when created with test.allow_panic.
 
 #include "documentsession.h"
 #include "engine.h"
@@ -8,6 +9,7 @@
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+#include <QtCore/QStringList>
 #include <QtTest/QSignalSpy>
 #include <QtTest/QTest>
 
@@ -56,6 +58,80 @@ QJsonObject engineEvent(const QString &type, const QJsonObject &payload) {
   return QJsonObject{{u"v"_s, bayan::Engine::kProtocolVersion}, {u"type"_s, type}, {u"seq"_s, 1'000'000}, {u"payload"_s, payload}};
 }
 
+// The configuration that lets diag.panic make the engine fail (engine protocol §3.3); the application never sets it.
+QJsonObject allowPanic() { return QJsonObject{{u"test"_s, QJsonObject{{u"allow_panic"_s, true}}}}; }
+
+// The session's messages after a failure (engine protocol §12.1, point 2), as DocumentSession words them.
+QString restarted(int restart, const QString &document) {
+  return u"The engine stopped working and was restarted (%1 of 3). %2"_s.arg(restart).arg(document);
+}
+const QString closedNow = u"The document was closed and can be reopened."_s;
+const QString stillClosed = u"The document is still closed and can be reopened."_s;
+const QString notOpenedYet = u"The document can be opened now."_s;
+const QString stoppedAgain =
+    u"The engine stopped working again, so it was not restarted. Close BayanDocs and open it again to restart the engine."_s;
+const QString couldNotOpen = u"The document could not be opened."_s;
+
+// Records every message the session says, in order, also one that repeats the last.
+class MessageLog final : public QObject {
+public:
+  explicit MessageLog(const bayan::DocumentSession &session) {
+    connect(&session, &bayan::DocumentSession::messageChanged, this, [this, &session] { messages_.append(session.message()); });
+  }
+  [[nodiscard]] const QStringList &messages() const { return messages_; }
+
+private:
+  QStringList messages_;
+};
+
+// Records the identifier of every request the engine answers, from its creation on, so that a test can wait for a reply that may already
+// have arrived, such as a new session's welcome.
+class ReplyLog final : public QObject {
+public:
+  explicit ReplyLog(const bayan::Engine &engine) {
+    connect(&engine, &bayan::Engine::replyReceived, this,
+            [this](qint64 requestId, bool, const QJsonObject &, const QJsonObject &) { answered_.append(requestId); });
+  }
+  [[nodiscard]] bool answered(qint64 requestId) const { return answered_.contains(requestId); }
+
+private:
+  QList<qint64> answered_;
+};
+
+// Waits for the session to have restarted after a failure: closed, with the message given, and the new session's hello answered. Returns
+// the identifier of that hello, the last request the session sent, or 0.
+qint64 waitForRestart(const ReplyLog &replies, const bayan::Engine &engine, const bayan::DocumentSession &session, const QString &message) {
+  if (!QTest::qWaitFor(
+          [&session, &message] { return session.status() == bayan::DocumentSession::Status::Closed && session.message() == message; })) {
+    qWarning("The session did not restart with the expected message; it says: %s", qUtf8Printable(session.message()));
+    return 0;
+  }
+  const qint64 hello = engine.lastPostedRequest();
+  return QTest::qWaitFor([&replies, hello] { return replies.answered(hello); }) ? hello : 0;
+}
+
+// Makes the engine fail: diag.panic with an identifier, whose reply is the error panic, or without, so that only engine.error says so.
+void panic(bayan::Engine &engine, bool withIdentifier) {
+  if (withIdentifier) {
+    QVERIFY(engine.request(u"diag.panic"_s) > 0);
+  } else {
+    QVERIFY(engine.post(u"diag.panic"_s));
+  }
+}
+
+// Checks that the session sends nothing more: neither input nor a view, nor doc.open when asked to reopen.
+void expectNothingSent(bayan::Engine &engine, bayan::DocumentSession &session) {
+  const qint64 before = engine.lastPostedRequest();
+  session.reopen();
+  QCOMPARE(session.sendText(u"late"_s), 0);
+  QCOMPARE(session.sendKey(bayan::protocol::KeyInput{.key = u"a"_s}), 0);
+  bayan::DocumentSession::View view = session.view();
+  view.zoom = 3.0;
+  session.setView(view);
+  QTest::qWait(200);
+  QCOMPARE(engine.lastPostedRequest(), before);
+}
+
 // The editable node of the accessibility tree (the mock document's editable line), or nullptr.
 const bayan::protocol::AccessibleNode *editableNode(const std::optional<bayan::protocol::AccessibleTree> &tree) {
   if (!tree) {
@@ -77,15 +153,17 @@ QString editableText(const bayan::DocumentSession &session) {
 // A session that has opened its document and received its accessibility tree (or learnt that the engine has none).
 struct OpenSession {
   std::unique_ptr<bayan::Engine> engine;
+  std::unique_ptr<ReplyLog> replies;
   std::unique_ptr<bayan::DocumentSession> session;
 };
 
-std::unique_ptr<OpenSession> openSession() {
+std::unique_ptr<OpenSession> openSession(const QJsonObject &config = {}) {
   auto open = std::make_unique<OpenSession>();
-  open->engine = bayan::Engine::create();
+  open->engine = bayan::Engine::create(config);
   if (!open->engine) {
     return nullptr;
   }
+  open->replies = std::make_unique<ReplyLog>(*open->engine);
   open->session = std::make_unique<bayan::DocumentSession>(*open->engine);
   QSignalSpy accessibility(open->session.get(), &bayan::DocumentSession::accessibilityChanged);
   open->session->start();
@@ -113,7 +191,13 @@ private slots:
   void unreadableAccessibilityUpdatesFetchTheTreeAgain();
   void malformedEventsFailTheSession();
   void eventsForAnotherDocumentAreIgnored();
-  void onlyUnrecoverableEngineErrorsFailTheSession();
+  void onlyUnrecoverableEngineErrorsRestartTheSession();
+  void failuresRestartTheSessionThreeTimesAndReopenOnlyWhenAsked();
+  void aFailureWhileTheDocumentOpensClosesIt();
+  void theOfferStaysThroughFurtherFailuresAndGoesAtTheStop();
+  void aFailureBeforeTheDocumentWasEverOpenOffersToOpenIt();
+  void aDocumentThatMakesTheEngineFailWheneverItOpensIsReopenedThreeTimes();
+  void leftoversOfTheFailedSessionAreIgnored();
 };
 
 void TestDocumentSession::opensTheDocumentAndReleasesTheBlob() {
@@ -147,7 +231,10 @@ void TestDocumentSession::releasesTheBlobWhenOpeningFails() {
   bayan::DocumentSession session(*engine);
   QSignalSpy statusChanges(&session, &bayan::DocumentSession::statusChanged);
   session.start();
-  QTRY_COMPARE(session.status(), Status::Failed);
+  // The engine refused the document and kept its session: the session says so, and neither stops nor restarts the engine.
+  QTRY_COMPARE(session.status(), Status::Closed);
+  QCOMPARE(session.message(), couldNotOpen);
+  QCOMPARE(session.offer(), bayan::DocumentSession::Offer::None);
   QCOMPARE(liveBlobs(*engine), 0);
   QVERIFY(statusChanges.count() >= 1);
 }
@@ -310,16 +397,228 @@ void TestDocumentSession::eventsForAnotherDocumentAreIgnored() {
   QCOMPARE(invalidated.count(), 0);
 }
 
-void TestDocumentSession::onlyUnrecoverableEngineErrorsFailTheSession() {
+void TestDocumentSession::onlyUnrecoverableEngineErrorsRestartTheSession() {
+  // A fake engine.error, from either engine: only recoverable decides, anything but true counts as false (engine protocol §12.1), and
+  // nothing of the error reaches the message, here markup that a document might have made the engine repeat.
   const auto open = openSession();
   QVERIFY(open);
+  bayan::Engine &engine = *open->engine;
   bayan::DocumentSession &session = *open->session;
-  const QJsonObject error{{u"code"_s, u"internal"_s}, {u"message_id"_s, u"engine-error-internal"_s}};
-  deliver(*open->engine, engineEvent(u"engine.error"_s, QJsonObject{{u"error"_s, error}, {u"recoverable"_s, true}}));
+  QSignalSpy closed(&session, &bayan::DocumentSession::documentClosed);
+  const QJsonObject hostile{{u"code"_s, u"<b>marker</b>"_s},
+                            {u"message_id"_s, u"engine-error-<img src=x>"_s},
+                            {u"args"_s, QJsonObject{{u"type"_s, u"marker"_s}}}};
+  QJsonObject recoverable = hostile;
+  recoverable.insert(u"recoverable"_s, true);
+  deliver(engine, engineEvent(u"engine.error"_s, recoverable));
   QTest::qWait(100);
   QCOMPARE(session.status(), Status::Ready);
-  deliver(*open->engine, engineEvent(u"engine.error"_s, QJsonObject{{u"error"_s, error}, {u"recoverable"_s, false}}));
+  QVERIFY(session.message().isEmpty());
+
+  // The string "true" is not true: the engine discarded its session. The document closes, and is not reopened.
+  QJsonObject notTrue = hostile;
+  notTrue.insert(u"recoverable"_s, u"true"_s);
+  deliver(engine, engineEvent(u"engine.error"_s, notTrue));
+  const qint64 hello = waitForRestart(*open->replies, engine, session, restarted(1, closedNow));
+  QVERIFY(hello > 0);
+  QCOMPARE(closed.count(), 1);
+  QCOMPARE(session.offer(), bayan::DocumentSession::Offer::Reopen);
+  QCOMPARE(session.documentId(), 0);
+  QCOMPARE(session.pageCount(), 0);
+  QVERIFY(!session.accessibilityTree());
+  QVERIFY(!session.message().contains(u"marker"_s) && !session.message().contains(u"<"_s));
+  QTest::qWait(200);
+  QCOMPARE(engine.lastPostedRequest(), hello);
+
+  // Without recoverable at all: the same, and the document is still closed.
+  deliver(engine, engineEvent(u"engine.error"_s, hostile));
+  QVERIFY(waitForRestart(*open->replies, engine, session, restarted(2, stillClosed)) > 0);
+  QCOMPARE(closed.count(), 1);
+  QCOMPARE(liveBlobs(engine), 0);
+}
+
+void TestDocumentSession::failuresRestartTheSessionThreeTimesAndReopenOnlyWhenAsked() {
+  const auto open = openSession(allowPanic());
+  QVERIFY(open);
+  bayan::Engine &engine = *open->engine;
+  bayan::DocumentSession &session = *open->session;
+  QSignalSpy refused(&session, &bayan::DocumentSession::inputRefused);
+  QSignalSpy closed(&session, &bayan::DocumentSession::documentClosed);
+  for (int restart = 1; restart <= 3; ++restart) {
+    // With an identifier the engine also answers diag.panic with the error panic, which must change nothing by itself.
+    panic(engine, restart != 2);
+    const qint64 hello = waitForRestart(*open->replies, engine, session, restarted(restart, closedNow));
+    QVERIFY2(hello > 0, qPrintable(u"restart %1"_s.arg(restart)));
+    QCOMPARE(closed.count(), restart);
+    QCOMPARE(session.offer(), bayan::DocumentSession::Offer::Reopen);
+    QCOMPARE(session.documentId(), 0);
+    QCOMPARE(session.pageCount(), 0);
+    // A new session, without the document: nothing but the hello was sent.
+    QTest::qWait(200);
+    QCOMPARE(engine.lastPostedRequest(), hello);
+    // Only when the user asks.
+    session.reopen();
+    QCOMPARE(session.message(), u"Reopening the document…"_s);
+    QCOMPARE(session.offer(), bayan::DocumentSession::Offer::None);
+    QTRY_COMPARE(session.status(), Status::Ready);
+    QCOMPARE(session.message(), u"The document was reopened."_s);
+    QVERIFY(session.documentId() > 0);
+    QVERIFY(session.pageCount() > 0);
+    if (!isStub()) {
+      // The real engine's mock document has an accessibility tree, which comes back with the document.
+      QTRY_VERIFY(session.accessibilityTree().has_value());
+    }
+  }
+  // The fourth failure within ten minutes: no new session; the session says so, offers nothing and sends nothing more.
+  panic(engine, true);
+  const qint64 before = engine.lastPostedRequest();
   QTRY_COMPARE(session.status(), Status::Failed);
+  QCOMPARE(session.message(), stoppedAgain);
+  QCOMPARE(session.offer(), bayan::DocumentSession::Offer::None);
+  QCOMPARE(closed.count(), 4);
+  QCOMPARE(engine.lastPostedRequest(), before);
+  expectNothingSent(engine, session);
+  QCOMPARE(session.status(), Status::Failed);
+  QCOMPARE(liveBlobs(engine), 0);
+  // The error panic was never taken for refused input.
+  for (const QList<QVariant> &code : std::as_const(refused)) {
+    QVERIFY(code.at(0).toString() != u"panic"_s && code.at(0).toString() != u"handshake_required"_s);
+  }
+}
+
+void TestDocumentSession::aFailureWhileTheDocumentOpensClosesIt() {
+  const auto open = openSession(allowPanic());
+  QVERIFY(open);
+  bayan::Engine &engine = *open->engine;
+  bayan::DocumentSession &session = *open->session;
+  panic(engine, true);
+  QVERIFY(waitForRestart(*open->replies, engine, session, restarted(1, closedNow)) > 0);
+  // diag.panic just before the doc.open of the reopening: the engine fails while the document is on its way in, and answers that doc.open
+  // with handshake_required from its next session. The document counts as closed, and is not reopened again.
+  panic(engine, false);
+  session.reopen();
+  const qint64 hello = waitForRestart(*open->replies, engine, session, restarted(2, closedNow));
+  QVERIFY(hello > 0);
+  QCOMPARE(session.offer(), bayan::DocumentSession::Offer::Reopen);
+  QTest::qWait(200);
+  QCOMPARE(engine.lastPostedRequest(), hello);
+  QCOMPARE(session.status(), Status::Closed);
+  QCOMPARE(liveBlobs(engine), 0);
+}
+
+void TestDocumentSession::theOfferStaysThroughFurtherFailuresAndGoesAtTheStop() {
+  const auto open = openSession(allowPanic());
+  QVERIFY(open);
+  bayan::Engine &engine = *open->engine;
+  bayan::DocumentSession &session = *open->session;
+  QSignalSpy closed(&session, &bayan::DocumentSession::documentClosed);
+  panic(engine, true);
+  QVERIFY(waitForRestart(*open->replies, engine, session, restarted(1, closedNow)) > 0);
+  // Failures while the document is closed: it is still closed, and the offer stays.
+  for (int restart = 2; restart <= 3; ++restart) {
+    panic(engine, restart == 2);
+    const qint64 hello = waitForRestart(*open->replies, engine, session, restarted(restart, stillClosed));
+    QVERIFY(hello > 0);
+    QCOMPARE(session.offer(), bayan::DocumentSession::Offer::Reopen);
+    QCOMPARE(engine.lastPostedRequest(), hello);
+  }
+  panic(engine, true);
+  QTRY_COMPARE(session.status(), Status::Failed);
+  QCOMPARE(session.message(), stoppedAgain);
+  QCOMPARE(session.offer(), bayan::DocumentSession::Offer::None);
+  QCOMPARE(closed.count(), 1);
+  expectNothingSent(engine, session);
+}
+
+void TestDocumentSession::aFailureBeforeTheDocumentWasEverOpenOffersToOpenIt() {
+  const auto engine = bayan::Engine::create(allowPanic());
+  QVERIFY(engine);
+  // Plays an engine that fails before the session has seen the welcome to its first hello: this slot, connected before the session's own,
+  // hands the session an unrecoverable engine.error just before the welcome reaches it, when it has not sent doc.open yet. The welcome
+  // then answers a hello of the discarded session, and must be ignored.
+  bool failed = false;
+  QObject::connect(engine.get(), &bayan::Engine::replyReceived, engine.get(),
+                   [&failed, &engine](qint64, bool, const QJsonObject &, const QJsonObject &) {
+                     if (!failed) {
+                       failed = true;
+                       emit engine->eventReceived(u"engine.error"_s, QJsonObject{{u"recoverable"_s, false}});
+                     }
+                   });
+  const ReplyLog replies(*engine);
+  bayan::DocumentSession session(*engine);
+  QSignalSpy closed(&session, &bayan::DocumentSession::documentClosed);
+  session.start();
+  const qint64 hello = waitForRestart(replies, *engine, session, restarted(1, notOpenedYet));
+  QVERIFY(hello > 0);
+  QCOMPARE(session.offer(), bayan::DocumentSession::Offer::Open);
+  QCOMPARE(closed.count(), 0);
+  // No doc.open, not for the old session's welcome either.
+  QTest::qWait(200);
+  QCOMPARE(engine->lastPostedRequest(), hello);
+  QCOMPARE(liveBlobs(*engine), 0);
+  session.reopen();
+  QCOMPARE(session.message(), u"Opening the document…"_s);
+  QTRY_COMPARE(session.status(), Status::Ready);
+  QCOMPARE(session.message(), u"The document was opened."_s);
+  QCOMPARE(liveBlobs(*engine), 0);
+}
+
+void TestDocumentSession::aDocumentThatMakesTheEngineFailWheneverItOpensIsReopenedThreeTimes() {
+  // Review finding M6's own case: every doc.open of the session goes out as diag.panic with the same identifier, so the engine fails while
+  // opening the document and answers the session's own doc.open with the error panic, as for a document that makes it fail whenever it
+  // opens. The document is opened once and reopened three times, and the fourth failure stops the session; it is never "could not be
+  // opened".
+  const auto engine = bayan::Engine::create(allowPanic());
+  QVERIFY(engine);
+  engine->setPanicOnRequestTypeForTesting(u"doc.open"_s);
+  const ReplyLog replies(*engine);
+  bayan::DocumentSession session(*engine);
+  const MessageLog log(session);
+  QSignalSpy closed(&session, &bayan::DocumentSession::documentClosed);
+  session.start();
+  for (int restart = 1; restart <= 3; ++restart) {
+    QVERIFY2(waitForRestart(replies, *engine, session, restarted(restart, closedNow)) > 0, qPrintable(u"restart %1"_s.arg(restart)));
+    QCOMPARE(session.offer(), bayan::DocumentSession::Offer::Reopen);
+    // Each reopening is the user's, and counts as one more restart when it fails too.
+    session.reopen();
+  }
+  QTRY_COMPARE(session.status(), Status::Failed);
+  QCOMPARE(session.offer(), bayan::DocumentSession::Offer::None);
+  const QString reopening = u"Reopening the document…"_s;
+  QCOMPARE(log.messages(), (QStringList{restarted(1, closedNow), reopening, restarted(2, closedNow), reopening, restarted(3, closedNow),
+                                        reopening, stoppedAgain}));
+  QVERIFY(!log.messages().contains(couldNotOpen));
+  QCOMPARE(closed.count(), 4);
+  // Four sessions, each with its hello and its doc.open, and nothing else: requests 1 to 8.
+  QCOMPARE(engine->lastPostedRequest(), 8);
+  expectNothingSent(*engine, session);
+  QCOMPARE(liveBlobs(*engine), 0);
+}
+
+void TestDocumentSession::leftoversOfTheFailedSessionAreIgnored() {
+  const auto open = openSession(allowPanic());
+  QVERIFY(open);
+  bayan::Engine &engine = *open->engine;
+  bayan::DocumentSession &session = *open->session;
+  QSignalSpy refused(&session, &bayan::DocumentSession::inputRefused);
+  // Requests that reach the engine after the one that panics, before the session has learnt of the failure: the new session answers them
+  // with handshake_required, and a refused view.set would otherwise stop the session for good.
+  panic(engine, true);
+  QVERIFY(session.sendText(u"lost"_s) > 0);
+  bayan::DocumentSession::View view = session.view();
+  view.zoom = 2.0;
+  session.setView(view);
+  QVERIFY(waitForRestart(*open->replies, engine, session, restarted(1, closedNow)) > 0);
+  QTest::qWait(200);
+  QCOMPARE(session.status(), Status::Closed);
+  QCOMPARE(refused.count(), 0);
+  // Late events about the old session's document change nothing either.
+  deliver(engine, engineEvent(u"view.pages"_s, QJsonObject{{u"doc_id"_s, 1}, {u"pages"_s, u"three"_s}}));
+  QTest::qWait(100);
+  QCOMPARE(session.status(), Status::Closed);
+  QCOMPARE(session.pageCount(), 0);
+  session.reopen();
+  QTRY_COMPARE(session.status(), Status::Ready);
 }
 
 QTEST_MAIN(TestDocumentSession)

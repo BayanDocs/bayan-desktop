@@ -35,6 +35,7 @@ Rectangle {
 
         Label {
             text: qsTr("Ribbon placeholder: commands arrive with the shared UI manifest.")
+            textFormat: Text.PlainText
             color: Theme.mutedText
             leftPadding: 8
         }

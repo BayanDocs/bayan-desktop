@@ -36,6 +36,10 @@ void SmokeTest::check() {
     finish(false, u"the engine session failed"_s);
     return;
   }
+  if (session_.status() == DocumentSession::Status::Closed) {
+    finish(false, u"no document is open: the engine refused it, or failed and was restarted"_s);
+    return;
+  }
   const QList<QObject *> roots = qml_.rootObjects();
   auto *window = roots.isEmpty() ? nullptr : qobject_cast<QQuickWindow *>(roots.constFirst());
   auto *canvas = window == nullptr ? nullptr : window->findChild<DocumentCanvas *>(u"documentCanvas"_s);

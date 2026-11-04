@@ -2,12 +2,19 @@
 // real engine from bayan-core (CORE-007) exists. It follows the same rules as the real engine: messages are processed in order on the
 // engine's own thread, the message callback runs on that thread, and no exception ever crosses the C interface.
 //
-// For tests of the shell's error paths, the configuration JSON may contain {"test": {"doc_open": "fail"}} (doc.open is refused) or
-// {"test": {"doc_open": "ignore"}} (doc.open is never answered). Anything else in "test" makes bayan_engine_new fail.
+// For tests of the shell's error paths, the configuration JSON may contain these test switches in "test":
+// - "doc_open": "fail" (doc.open is refused) or "ignore" (doc.open is never answered);
+// - "allow_panic": true, which lets diag.panic make the engine fail as the real engine's does (engine protocol §3.3, §6.7, §12): the
+//   message is answered with the error "panic" if it has an identifier, then engine.error says that the session was discarded
+//   (recoverable: false), and the engine continues with a fresh session that needs a new hello. Without it, diag.panic is refused with
+//   "not_allowed", as by the real engine;
+// - "engine_version": a string that welcome reports as the engine's version instead of the stub's own, so that tests can hand the shell
+//   an engine string with markup in it (bayan_version() still returns the stub's own version).
+// Anything else in "test", or a value of the wrong type, makes bayan_engine_new fail, as the real engine's configuration does.
 //
 // It understands only what the shell needs to show a page: the hello/welcome handshake, doc.open (always opens the test page), view.set
-// (answered with the events engine protocol §6.2 lists: view.pages, render.invalidate, view.layout.progress and overlay.update) and
-// doc.close. Everything else, input and accessibility included, is answered with an "unsupported_message" error: the real engine from
+// (answered with the events engine protocol §6.2 lists: view.pages, render.invalidate, view.layout.progress and overlay.update), doc.close
+// and diag.panic. Everything else, input and accessibility included, is answered with an "unsupported_message" error: the real engine from
 // bayan-core (BAYAN_ENGINE=sdk) is the one to test those against.
 
 #include "bayan_ffi.h"
@@ -166,7 +173,10 @@ struct BayanEngine {
 
   // Used only on the engine thread.
   bool handshakeDone = false;
-  DocOpenMode docOpenMode = DocOpenMode::Normal; // set before the engine thread starts
+  // Test switches, set before the engine thread starts (see the top of this file).
+  DocOpenMode docOpenMode = DocOpenMode::Normal;
+  bool allowPanic = false;
+  QString engineVersion = QString::fromLatin1(kStubVersion);
   qint64 nextSequence = 1;
 
   std::thread thread;
@@ -277,7 +287,7 @@ void BayanEngine::handleMessage(qint64 id, const QString &type, const QJsonObjec
     handshakeDone = true;
     reply(id, u"welcome"_s,
           QJsonObject{{u"protocol_version"_s, kProtocolVersion},
-                      {u"engine_version"_s, QString::fromLatin1(kStubVersion)},
+                      {u"engine_version"_s, engineVersion},
                       {u"layout_epoch"_s, 0},
                       {u"features"_s, QJsonArray{u"stub"_s}}});
     return;
@@ -343,9 +353,63 @@ void BayanEngine::handleMessage(qint64 id, const QString &type, const QJsonObjec
     reply(id, {}, {});
     return;
   }
+  if (type == u"diag.panic"_s) {
+    if (!allowPanic) {
+      fail(id, errorObject(u"not_allowed"_s, u"engine-error-not-allowed"_s, QJsonObject{{u"reason"_s, u"test_switch_off"_s}}));
+      return;
+    }
+    // What the real engine does when a message's handler panics: the session is discarded with its document, the message is answered with
+    // the error panic, and engine.error says that the session is gone. The next message other than hello gets handshake_required.
+    handshakeDone = false;
+    documentOpen = false;
+    const QJsonObject panic = errorObject(u"panic"_s, u"engine-error-panic"_s);
+    if (id > 0) {
+      send(QJsonObject{{u"v"_s, kProtocolVersion}, {u"re"_s, id}, {u"ok"_s, false}, {u"error"_s, panic}});
+    }
+    QJsonObject failure = panic;
+    failure.insert(u"recoverable"_s, false);
+    event(u"engine.error"_s, failure);
+    return;
+  }
   // Only the type is echoed back (shortened), never message content.
   fail(id, errorObject(u"unsupported_message"_s, u"engine-error-unsupported-message"_s, QJsonObject{{u"type"_s, type.left(64)}}));
 }
+
+namespace {
+
+// Reads the test switches described at the top of this file into the engine. Returns false for anything else in "test" and for a value of
+// the wrong type, so that a misspelt switch cannot silently test the normal path.
+bool configureTestSwitches(BayanEngine &engine, const QJsonValue &value) {
+  if (value.isUndefined()) {
+    return true;
+  }
+  if (!value.isObject()) {
+    return false;
+  }
+  const QJsonObject test = value.toObject();
+  for (auto it = test.begin(); it != test.end(); ++it) {
+    const QJsonValue setting = it.value();
+    if (it.key() == u"doc_open"_s && setting.isString()) {
+      const QString mode = setting.toString();
+      if (mode == u"fail"_s) {
+        engine.docOpenMode = DocOpenMode::Fail;
+      } else if (mode == u"ignore"_s) {
+        engine.docOpenMode = DocOpenMode::Ignore;
+      } else if (mode != u"normal"_s) {
+        return false;
+      }
+    } else if (it.key() == u"allow_panic"_s && setting.isBool()) {
+      engine.allowPanic = setting.toBool();
+    } else if (it.key() == u"engine_version"_s && setting.isString()) {
+      engine.engineVersion = setting.toString();
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+} // namespace
 
 extern "C" {
 
@@ -361,13 +425,7 @@ BayanEngine *bayan_engine_new(const uint8_t *config_json, size_t config_len) {
         return nullptr;
       }
       // The real engine reads its settings here; the stub only knows the test switches described at the top of this file.
-      const QJsonObject test = config.value(u"test"_s).toObject();
-      const QString docOpen = test.value(u"doc_open"_s).toString(u"normal"_s);
-      if (docOpen == u"fail"_s) {
-        engine->docOpenMode = DocOpenMode::Fail;
-      } else if (docOpen == u"ignore"_s) {
-        engine->docOpenMode = DocOpenMode::Ignore;
-      } else if (docOpen != u"normal"_s || test.size() > (test.contains(u"doc_open"_s) ? 1 : 0)) {
+      if (!configureTestSwitches(*engine, config.value(u"test"_s))) {
         return nullptr;
       }
     }
