@@ -129,8 +129,10 @@ void Engine::deliverFromEngineThread(const std::uint8_t *json, std::size_t lengt
           this, [this] { emit protocolError(u"The engine sent an empty or oversized message."_s); }, Qt::QueuedConnection);
       return;
     }
-    QByteArray copy = QByteArrayView(json, static_cast<qsizetype>(length)).toByteArray();
-    QMetaObject::invokeMethod(this, [this, message = std::move(copy)] { dispatch(message); }, Qt::QueuedConnection);
+    // DESK-003 AC-2: a deliberate heap-use-after-free, reverted by the next commit. The main thread reads the engine's buffer after the
+    // callback has returned, when the engine has freed it, instead of a copy made here.
+    const QByteArrayView borrowed(json, static_cast<qsizetype>(length));
+    QMetaObject::invokeMethod(this, [this, borrowed] { dispatch(borrowed.toByteArray()); }, Qt::QueuedConnection);
   } catch (...) {
     // Out of memory: the message is lost. Count it, so that the next message that does arrive reports the loss.
     lostMessages_.fetch_add(1, std::memory_order_relaxed);
