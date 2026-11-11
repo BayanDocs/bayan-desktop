@@ -2,7 +2,9 @@
 // most of these tests check that a malformed value is refused as a whole rather than guessed at.
 
 #include "protocol.h"
+#include "protocolschema.h"
 
+#include <QtCore/QDebug>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
 #include <QtTest/QTest>
@@ -16,6 +18,16 @@ using namespace Qt::StringLiterals;
 using namespace bayan::protocol;
 
 namespace {
+
+// Whether a fragment written for these tests is what the engine could send: the protocol's JSON Schema accepts it as this definition
+// (tests/support/protocolschema.h). The tests check it for each valid fragment, so that the samples stay valid when the schema moves.
+bool matches(const QJsonValue &fragment, const QString &definition) {
+  const QStringList problems = bayan::test::ProtocolSchema::engineProtocol().problems(fragment, definition);
+  if (!problems.isEmpty()) {
+    qWarning().noquote() << "Not a valid" << definition << "of the engine protocol:\n" << problems.join(u'\n');
+  }
+  return problems.isEmpty();
+}
 
 QJsonObject rect(QJsonValue x, QJsonValue y, QJsonValue width, QJsonValue height) {
   return QJsonObject{{u"x"_s, x}, {u"y"_s, y}, {u"width"_s, width}, {u"height"_s, height}};
@@ -95,6 +107,8 @@ void TestProtocol::rectanglesIntersectOnlyWithArea() {
 }
 
 void TestProtocol::pagesCountFromZeroWithSaneSizes() {
+  QVERIFY(matches(page(0, 0), u"PageInfo"_s));
+  QVERIFY(matches(page(1, 21'000'000), u"PageInfo"_s));
   const auto pages = parsePages(QJsonArray{page(0, 0), page(1, 21'000'000)}).value_or(std::vector<Page>{});
   QCOMPARE(pages.size(), std::size_t{2});
   QCOMPARE(pages.at(1), (Page{.index = 1, .width = 15'544'800, .height = 20'116'800, .section = 0, .x = 0, .y = 21'000'000}));
@@ -115,6 +129,7 @@ void TestProtocol::pagesCountFromZeroWithSaneSizes() {
 
 void TestProtocol::regionsMustNameExistingPages() {
   const QJsonObject region{{u"page"_s, 1}, {u"rect"_s, rect(0, 0, 5, 5)}};
+  QVERIFY(matches(region, u"PageRect"_s));
   QCOMPARE(parseRegions(QJsonArray{region}, 2), (std::vector<PageRect>{{.page = 1, .rect = {.x = 0, .y = 0, .width = 5, .height = 5}}}));
   QVERIFY(!parseRegions(QJsonArray{region}, 1));
   QVERIFY(!parseRegions(QJsonArray{region}, 0));
@@ -125,6 +140,8 @@ void TestProtocol::regionsMustNameExistingPages() {
 void TestProtocol::overlaysHaveACaretOrNullAndSelectionsPerPage() {
   const QJsonObject caret{{u"page"_s, 0}, {u"rect"_s, rect(1, 2, 3, 4)}, {u"visible"_s, true}};
   const QJsonArray selection{QJsonObject{{u"page"_s, 1}, {u"rects"_s, QJsonArray{rect(0, 0, 1, 1), rect(2, 0, 1, 1)}}}};
+  QVERIFY(matches(caret, u"Caret"_s));
+  QVERIFY(matches(selection.at(0), u"SelectionRects"_s));
   const Overlay expected{.caret = Caret{.page = 0, .rect = {.x = 1, .y = 2, .width = 3, .height = 4}, .visible = true},
                          .selection = {{.page = 1, .rect = {.x = 0, .y = 0, .width = 1, .height = 1}},
                                        {.page = 1, .rect = {.x = 2, .y = 0, .width = 1, .height = 1}}}};
@@ -141,6 +158,7 @@ void TestProtocol::overlaysHaveACaretOrNullAndSelectionsPerPage() {
 }
 
 void TestProtocol::readsAnAccessibilityTree() {
+  QVERIFY(matches(sampleTree(), u"A11yNode"_s));
   const auto tree = parseAccessibleTree(sampleTree(), 2);
   if (!tree) {
     QFAIL("the sample tree was refused");
@@ -227,6 +245,7 @@ void TestProtocol::refusesMalformedAccessibilityTrees() {
 
 void TestProtocol::caretIsAPositionOrNull() {
   using Parsed = std::optional<std::optional<AccessibleCaret>>;
+  QVERIFY(matches(QJsonObject{{u"node"_s, 6}, {u"offset"_s, 2}}, u"A11yCaret"_s));
   QCOMPARE(parseAccessibleCaret(QJsonObject{{u"node"_s, 6}, {u"offset"_s, 2}}), Parsed(AccessibleCaret{.node = 6, .offset = 2}));
   QCOMPARE(parseAccessibleCaret(QJsonValue::Null), Parsed(std::optional<AccessibleCaret>()));
   QVERIFY(!parseAccessibleCaret(QJsonObject{{u"node"_s, 6}}));

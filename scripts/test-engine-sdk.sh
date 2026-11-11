@@ -5,24 +5,31 @@
 #   - with --sdk <folder>, against that SDK, such as the real one that scripts/build-engine-sdk.sh builds from bayan-core (CORE-007), whose
 #     mock document the input, input-method and accessibility tests need.
 # Either way it then builds bayan-desktop against the SDK and runs the tests that use the engine (workflow preset engine-sdk, or
-# engine-sdk-msvc on Windows). CI runs both on Linux, macOS and Windows. Run it from any directory after loading the environment that
-# scripts/dev-setup.sh prints; on Windows, run it from Git Bash inside an x64 Visual Studio developer environment, as for the msvc preset.
+# engine-sdk-msvc on Windows). CI runs both on Linux, macOS and Windows. With --sanitizers (Linux only) it builds and tests with
+# AddressSanitizer and UndefinedBehaviorSanitizer instead (workflow preset engine-sdk-asan), as CI's sanitizer job does against the real
+# engine. Run it from any directory after loading the environment that scripts/dev-setup.sh prints; on Windows, run it from Git Bash inside
+# an x64 Visual Studio developer environment, as for the msvc preset.
 #
-# Usage: scripts/test-engine-sdk.sh [--sdk <folder>]
+# Usage: scripts/test-engine-sdk.sh [--sdk <folder>] [--sanitizers]
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 work_dir="$root/build/stand-in-sdk"
 
 sdk_dir=""
+sanitizers=false
 while (($# > 0)); do
   case "$1" in
     --sdk)
       sdk_dir=$(cd "${2:?--sdk needs a folder}" && pwd)
       shift 2
       ;;
+    --sanitizers)
+      sanitizers=true
+      shift
+      ;;
     *)
-      echo "Unknown argument: $1 (usage: scripts/test-engine-sdk.sh [--sdk <folder>])" >&2
+      echo "Unknown argument: $1 (usage: scripts/test-engine-sdk.sh [--sdk <folder>] [--sanitizers])" >&2
       exit 2
       ;;
   esac
@@ -35,7 +42,13 @@ esac
 # CMake on Windows expects native paths.
 native() { if $windows; then cygpath -m "$1"; else echo "$1"; fi; }
 
-if $windows; then
+if $sanitizers; then
+  if [[ $(uname -s) != Linux ]]; then
+    echo "--sanitizers needs Linux, as the asan preset does" >&2
+    exit 2
+  fi
+  preset=engine-sdk-asan
+elif $windows; then
   preset=engine-sdk-msvc
 else
   preset=engine-sdk
