@@ -13,7 +13,7 @@
 // - format, for the formats the generator gives Rust's number types (uint8, uint32, uint64, int32, int64 and double), as an assertion:
 //   JSON Schema only annotates formats by default, but the engine cannot send a number outside its Rust type's range;
 // - the annotations $schema (which must name draft 2020-12), $id, title, description and default, and bayan-core's extensions
-//   x-bayan-messages (read for the type of each request's reply), x-bayan-protocol-version and x-bayan-web-type.
+//   x-bayan-messages (read for the definition and the type of each request's reply), x-bayan-protocol-version and x-bayan-web-type.
 // Loading a schema that uses any other keyword or format anywhere fails, so that a later schema that needs more cannot pass unchecked.
 
 #pragma once
@@ -44,12 +44,22 @@ public:
   [[nodiscard]] QStringList problems(const QJsonValue &value, const QString &definition = {}) const;
 
   // The problems of a message from the engine to the shell, which must be a reply (Reply) or an event (Event), exactly one of the two. A
-  // successful reply's payload must also have the type that x-bayan-messages gives the reply to requestType, the type of the request it
-  // answers; without requestType a successful reply is refused, so that no payload goes unchecked.
+  // successful reply must also be the reply that x-bayan-messages gives to requestType, the type of the request it answers: its payload
+  // must match the reply's definition, and its type must be the entry's reply_type where the entry gives one ("welcome" for hello) and
+  // absent where it gives none, as the engine sends it. Without requestType a successful reply is refused, so that no reply goes unchecked.
   [[nodiscard]] QStringList problemsOfMessageFromEngine(const QJsonObject &message, const QString &requestType = {}) const;
+
+  // Where problemsOfMessageFromEngine() finds problems, as JSON Pointers: the place of each wrong value, or the place where each missing
+  // field belongs. A line that only says that no alternative of a oneOf or anyOf matched has no place of its own (the problems of the
+  // closest alternative, which follow it, have); a problem of the message as a whole, such as a successful reply without requestType, is
+  // placed at "" (the whole message).
+  [[nodiscard]] QStringList placesOfProblemsOfMessageFromEngine(const QJsonObject &message, const QString &requestType = {}) const;
 
   // The name of the definition of the reply to a request of this type, from x-bayan-messages (such as "Welcome" for hello), or empty.
   [[nodiscard]] QString replyDefinition(const QString &requestType) const { return replies_.value(requestType); }
+
+  // The type of the reply to a request of this type, from x-bayan-messages (such as "welcome" for hello), or empty if the reply has none.
+  [[nodiscard]] QString replyType(const QString &requestType) const { return replyTypes_.value(requestType); }
 
   // Whether the engine could send this message in reply to some request: problemsOfMessageFromEngine() finds no problem with it for at
   // least one type of request (or without one, for an event or a failed reply).
@@ -63,6 +73,8 @@ private:
   QHash<QString, QJsonValue> definitions_;
   // The definition of each request's reply, by request type (x-bayan-messages).
   QHash<QString, QString> replies_;
+  // The type of each request's reply, by request type, empty where the reply has none (reply_type in x-bayan-messages).
+  QHash<QString, QString> replyTypes_;
 };
 
 } // namespace bayan::test

@@ -23,12 +23,15 @@ namespace {
 using Definitions = QHash<QString, QJsonValue>;
 
 // A problem of a value: where it is (a JSON Pointer), what is wrong, whether it is a const that does not match (a sign that the value was
-// meant for another alternative of a oneOf or anyOf), and how deeply it is indented under the alternative it explains.
+// meant for another alternative of a oneOf or anyOf), how deeply it is indented under the alternative it explains, the name of the
+// field it misses, if that is the problem, and whether it only says that no alternative matched (the closest one's problems follow it).
 struct Problem {
   QString pointer;
   QString text;
   bool constMismatch = false;
   int indent = 0;
+  QString missingField{};
+  bool listsAlternatives = false;
 };
 using Problems = QList<Problem>;
 
@@ -89,6 +92,11 @@ Closeness closeness(const Problems &problems) {
 
 // A field name as a JSON Pointer reference token.
 QString escaped(QString name) { return name.replace(u'~', u"~0"_s).replace(u'/', u"~1"_s); }
+
+// Where a problem is, as a JSON Pointer: the wrong value's place, or the place where a missing field belongs.
+QString place(const Problem &problem) {
+  return problem.missingField.isEmpty() ? problem.pointer : problem.pointer + u'/' + escaped(problem.missingField);
+}
 
 QString compact(const QJsonValue &value) {
   // Wrapped in an array, written, and unwrapped again, which works for every kind of value.
@@ -341,7 +349,8 @@ bool check(const Definitions &definitions, const QJsonValue &schema, const QJson
     const QJsonObject object = value.toObject();
     for (const QJsonValue name : keywords.value(u"required"_s).toArray()) {
       if (!object.contains(name.toString())) {
-        problems.append({.pointer = pointer, .text = u"lacks the required field %1"_s.arg(name.toString())});
+        problems.append(
+            {.pointer = pointer, .text = u"lacks the required field %1"_s.arg(name.toString()), .missingField = name.toString()});
         valid = false;
       }
     }
@@ -389,13 +398,60 @@ bool check(const Definitions &definitions, const QJsonValue &schema, const QJson
       continue;
     }
     problems.append({.pointer = pointer,
-                     .text = u"matches none of the %1 alternatives of %2; the closest one says:"_s.arg(alternatives.size()).arg(keyword)});
+                     .text = u"matches none of the %1 alternatives of %2; the closest one says:"_s.arg(alternatives.size()).arg(keyword),
+                     .listsAlternatives = true});
     for (Problem problem : closest.value_or(Problems())) {
       ++problem.indent;
       problems.append(std::move(problem));
     }
   }
   return valid;
+}
+
+// What x-bayan-messages says about the reply to a request: the request's type, the reply's definition and the reply's type, each empty if
+// there is none.
+struct ReplyOf {
+  QString requestType;
+  QString definition;
+  QString type;
+};
+
+// The problems of a message from the engine (ProtocolSchema::problemsOfMessageFromEngine()); a successful reply is checked as reply says.
+Problems messageProblems(const Definitions &definitions, const QJsonObject &message, const ReplyOf &reply) {
+  // The engine sends replies and events, exactly one of the two in each message, and never a request.
+  const QJsonObject fromEngine{{u"oneOf"_s, QJsonArray{QJsonObject{{u"$ref"_s, QString(kDefinitionsPrefix.toString() + u"Reply"_s)}},
+                                                       QJsonObject{{u"$ref"_s, QString(kDefinitionsPrefix.toString() + u"Event"_s)}}}}};
+  if (!definitions.contains(u"Reply"_s) || !definitions.contains(u"Event"_s)) {
+    return {{.pointer = {}, .text = u"the schema defines no Reply or no Event"_s}};
+  }
+  Problems found;
+  if (!check(definitions, fromEngine, message, {}, 0, found) || !message.contains(u"re"_s) || message.value(u"ok"_s) != QJsonValue(true)) {
+    return found;
+  }
+  // A successful reply must be the reply to its request.
+  if (reply.requestType.isEmpty()) {
+    return {
+        {.pointer = {}, .text = u"a successful reply: the test must say which type of request it answers, so that it can be checked"_s}};
+  }
+  if (reply.definition.isEmpty()) {
+    return {
+        {.pointer = {}, .text = u"a successful reply to %1, which has no reply in the schema's x-bayan-messages"_s.arg(reply.requestType)}};
+  }
+  // Its type is the reply_type of the request's entry, or none, as the engine sends it. Reply's own check has made sure that a type is a
+  // string.
+  const QJsonValue type = message.value(u"type"_s);
+  if (reply.type.isEmpty() && !type.isUndefined()) {
+    found.append({.pointer = u"/type"_s, .text = u"is %1, but a reply to %2 has no type"_s.arg(compact(type), reply.requestType)});
+  } else if (!reply.type.isEmpty() && type.isUndefined()) {
+    found.append({.pointer = {},
+                  .text = u"lacks the field type, which is \"%1\" in a reply to %2"_s.arg(reply.type, reply.requestType),
+                  .missingField = u"type"_s});
+  } else if (!reply.type.isEmpty() && type != QJsonValue(reply.type)) {
+    found.append({.pointer = u"/type"_s,
+                  .text = u"is %1, not \"%2\", the type of a reply to %3"_s.arg(compact(type), reply.type, reply.requestType)});
+  }
+  check(definitions, definitions.value(reply.definition), message.value(u"payload"_s), u"/payload"_s, 1, found);
+  return found;
 }
 
 } // namespace
@@ -451,13 +507,22 @@ std::optional<ProtocolSchema> ProtocolSchema::load(const QByteArray &json, QStri
     if (direction != u"to_engine"_s && direction != u"to_shell"_s) {
       problems.append(where + u": direction must be to_engine or to_shell"_s);
     }
+    // web_reply names the reply as the web worker host delivers it (render.tile's pixels as an ImageBitmap, engine protocol §3.2), a type
+    // that exists only for the TypeScript declarations: no JSON has its shape, and the desktop never receives it, so the checker only
+    // checks that it names a definition.
     for (const QString &field : {u"payload"_s, u"reply"_s, u"web_reply"_s}) {
       const QJsonValue reference = entry.value(field);
       if ((field == u"payload"_s || !reference.isUndefined()) && !defined(reference.toString())) {
         problems.append(where + u": %1 names no definition of this schema"_s.arg(field));
       }
     }
+    // reply_type is the type a successful reply carries, such as "welcome"; a reply without it has none.
+    const QJsonValue replyType = entry.value(u"reply_type"_s);
+    if (!replyType.isUndefined() && (!replyType.isString() || replyType.toString().isEmpty() || !entry.contains(u"reply"_s))) {
+      problems.append(where + u": reply_type must be the type of a reply, on an entry that has one"_s);
+    }
     schema.replies_.insert(type, definitionName(entry.value(u"reply"_s).toString()));
+    schema.replyTypes_.insert(type, replyType.toString());
   }
   if (problems.size() > before) {
     return std::nullopt;
@@ -502,27 +567,20 @@ bool ProtocolSchema::couldComeFromEngine(const QJsonObject &message) const {
 }
 
 QStringList ProtocolSchema::problemsOfMessageFromEngine(const QJsonObject &message, const QString &requestType) const {
-  // The engine sends replies and events, exactly one of the two in each message, and never a request.
-  const QJsonObject fromEngine{{u"oneOf"_s, QJsonArray{QJsonObject{{u"$ref"_s, QString(kDefinitionsPrefix.toString() + u"Reply"_s)}},
-                                                       QJsonObject{{u"$ref"_s, QString(kDefinitionsPrefix.toString() + u"Event"_s)}}}}};
-  if (!definitions_.contains(u"Reply"_s) || !definitions_.contains(u"Event"_s)) {
-    return {u"the schema defines no Reply or no Event"_s};
-  }
-  Problems found;
-  if (!check(definitions_, fromEngine, message, {}, 0, found)) {
-    return written(found);
-  }
-  if (message.contains(u"re"_s) && message.value(u"ok"_s) == QJsonValue(true)) {
-    if (requestType.isEmpty()) {
-      return {u"a successful reply: the test must say which type of request it answers, so that its payload can be checked"_s};
+  return written(messageProblems(definitions_, message,
+                                 {.requestType = requestType, .definition = replyDefinition(requestType), .type = replyType(requestType)}));
+}
+
+QStringList ProtocolSchema::placesOfProblemsOfMessageFromEngine(const QJsonObject &message, const QString &requestType) const {
+  QStringList places;
+  for (const Problem &problem :
+       messageProblems(definitions_, message,
+                       {.requestType = requestType, .definition = replyDefinition(requestType), .type = replyType(requestType)})) {
+    if (!problem.listsAlternatives) {
+      places.append(place(problem));
     }
-    const QString reply = replyDefinition(requestType);
-    if (reply.isEmpty()) {
-      return {u"a successful reply to %1, which has no reply in the schema's x-bayan-messages"_s.arg(requestType)};
-    }
-    check(definitions_, definitions_.value(reply), message.value(u"payload"_s), u"/payload"_s, 1, found);
   }
-  return written(found);
+  return places;
 }
 
 } // namespace bayan::test

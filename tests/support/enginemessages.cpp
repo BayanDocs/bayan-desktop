@@ -6,6 +6,7 @@
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonParseError>
 
+#include <algorithm>
 #include <cstdint>
 
 using namespace Qt::StringLiterals;
@@ -52,14 +53,34 @@ bool emitEvent(Engine &engine, const QString &type, const QJsonObject &payload) 
   return true;
 }
 
-bool deliverMalformed(Engine &engine, const QByteArray &json, const QString &why) {
+bool deliverMalformed(Engine &engine, const QByteArray &json, const QString &brokenAt, const QString &why) {
   QJsonParseError error{};
   const QJsonDocument document = QJsonDocument::fromJson(json, &error);
-  // Text that is not a JSON object is malformed as it stands; an object must be one the engine could not send in reply to any request.
-  if (error.error == QJsonParseError::NoError && document.isObject() &&
-      ProtocolSchema::engineProtocol().couldComeFromEngine(document.object())) {
-    qWarning().noquote() << "Meant to be malformed (" << why << "), but the engine could send it:" << QString::fromUtf8(json);
-    return false;
+  if (error.error != QJsonParseError::NoError || !document.isObject()) {
+    // Text that is not a JSON object is broken as a whole.
+    if (!brokenAt.isEmpty()) {
+      qWarning().noquote() << "Meant to be broken at" << brokenAt << "(" << why
+                           << "), but it is not a JSON object:" << QString::fromUtf8(json);
+      return false;
+    }
+  } else {
+    // An object must be one the engine could not send in reply to any request, and every problem the schema check finds must lie in the
+    // one broken place.
+    const ProtocolSchema &schema = ProtocolSchema::engineProtocol();
+    const QJsonObject message = document.object();
+    if (schema.couldComeFromEngine(message)) {
+      qWarning().noquote() << "Meant to be malformed (" << why << "), but the engine could send it:" << QString::fromUtf8(json);
+      return false;
+    }
+    const QStringList places = schema.placesOfProblemsOfMessageFromEngine(message);
+    const bool there =
+        std::ranges::all_of(places, [&brokenAt](const QString &place) { return place == brokenAt || place.startsWith(brokenAt + u'/'); });
+    if (brokenAt.isEmpty() || places.isEmpty() || !there) {
+      qWarning().noquote() << "Meant to be broken only at" << (brokenAt.isEmpty() ? u"(nothing)"_s : brokenAt) << "(" << why
+                           << "), but the schema check finds:\n"
+                           << schema.problemsOfMessageFromEngine(message).join(u'\n');
+      return false;
+    }
   }
   engine.deliverFromEngineThread(bytesOf(json), static_cast<std::size_t>(json.size()));
   return true;
@@ -70,7 +91,7 @@ bool deliverOversized(Engine &engine, const QJsonObject &message, std::size_t cl
     return false;
   }
   if (claimedLength <= static_cast<std::size_t>(Engine::kMaxMessageBytes)) {
-    qWarning() << "The claimed length" << claimedLength << "is not over the limit, so the wrapper would read beyond the message.";
+    qWarning() << "The claimed length" << claimedLength << "is not over the limit, so the wrapper would read that many bytes.";
     return false;
   }
   const QByteArray json = compact(message);

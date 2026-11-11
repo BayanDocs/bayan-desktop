@@ -74,6 +74,8 @@ foreach(unit IN ITEMS protocol tiles input accessibletext restartallowance)
   add_test(NAME unit.${unit} COMMAND tst_${unit})
   set_tests_properties(unit.${unit} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1" TIMEOUT 60)
 endforeach()
+# The protocol parsers' tests also check their valid samples against the protocol's JSON Schema, so that the samples stay valid.
+target_link_libraries(tst_protocol PRIVATE bayan_protocol_schema)
 
 # Unit tests of the tests' checker of the engine protocol's JSON Schema (support/protocolschema.h), which needs no engine.
 qt_add_executable(tst_protocolschema tst_protocolschema.cpp)

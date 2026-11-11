@@ -386,7 +386,7 @@ void TestDocumentSession::malformedEventsFailTheSession() {
   // A page list that is not a list: the session cannot trust the engine any more.
   QVERIFY(deliverMalformed(
       *open->engine, compact(engineEvent(u"view.pages"_s, QJsonObject{{u"doc_id"_s, session.documentId()}, {u"pages"_s, u"three"_s}})),
-      u"pages is not a list"_s));
+      u"/payload/pages"_s, u"pages is not a list"_s));
   QTRY_COMPARE(session.status(), Status::Failed);
   QCOMPARE(session.sendText(u"late"_s), 0);
 }
@@ -408,7 +408,7 @@ void TestDocumentSession::eventsForAnotherDocumentAreIgnored() {
   // The session does not even read an event about another document: one it could not read does not stop it.
   QVERIFY(deliverMalformed(*open->engine,
                            compact(engineEvent(u"view.pages"_s, QJsonObject{{u"doc_id"_s, other}, {u"pages"_s, u"three"_s}})),
-                           u"pages is not a list"_s));
+                           u"/payload/pages"_s, u"pages is not a list"_s));
   QTest::qWait(100);
   QCOMPARE(session.status(), Status::Ready);
   QCOMPARE(invalidated.count(), 0);
@@ -439,7 +439,8 @@ void TestDocumentSession::onlyUnrecoverableEngineErrorsRestartTheSession() {
   // either of these two errors, but the shell must not trust that it cannot.
   QJsonObject notTrue = hostile;
   notTrue.insert(u"recoverable"_s, u"true"_s);
-  QVERIFY(deliverMalformed(engine, compact(engineEvent(u"engine.error"_s, notTrue)), u"recoverable is a string"_s));
+  QVERIFY(
+      deliverMalformed(engine, compact(engineEvent(u"engine.error"_s, notTrue)), u"/payload/recoverable"_s, u"recoverable is a string"_s));
   const qint64 hello = waitForRestart(*open->replies, engine, session, restarted(1, closedNow));
   QVERIFY(hello > 0);
   QCOMPARE(closed.count(), 1);
@@ -452,7 +453,8 @@ void TestDocumentSession::onlyUnrecoverableEngineErrorsRestartTheSession() {
   QCOMPARE(engine.lastPostedRequest(), hello);
 
   // Without recoverable at all: the same, and the document is still closed.
-  QVERIFY(deliverMalformed(engine, compact(engineEvent(u"engine.error"_s, hostile)), u"recoverable is missing"_s));
+  QVERIFY(
+      deliverMalformed(engine, compact(engineEvent(u"engine.error"_s, hostile)), u"/payload/recoverable"_s, u"recoverable is missing"_s));
   QVERIFY(waitForRestart(*open->replies, engine, session, restarted(2, stillClosed)) > 0);
   QCOMPARE(closed.count(), 1);
   QCOMPARE(liveBlobs(engine), 0);
@@ -642,7 +644,7 @@ void TestDocumentSession::leftoversOfTheFailedSessionAreIgnored() {
   // Late events about the old session's document change nothing either, whether the session could read them or not.
   QVERIFY(deliver(engine, engineEvent(u"view.pages"_s, QJsonObject{{u"doc_id"_s, 1}, {u"pages"_s, QJsonArray{letterPage(0)}}})));
   QVERIFY(deliverMalformed(engine, compact(engineEvent(u"view.pages"_s, QJsonObject{{u"doc_id"_s, 1}, {u"pages"_s, u"three"_s}})),
-                           u"pages is not a list"_s));
+                           u"/payload/pages"_s, u"pages is not a list"_s));
   QTest::qWait(100);
   QCOMPARE(session.status(), Status::Closed);
   QCOMPARE(session.pageCount(), 0);

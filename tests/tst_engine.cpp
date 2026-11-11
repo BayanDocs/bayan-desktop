@@ -6,7 +6,9 @@
 #include "enginemessages.h"
 
 #include <QtCore/QJsonArray>
+#include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+#include <QtCore/QRegularExpression>
 #include <QtCore/QThread>
 #include <QtGui/QColor>
 #include <QtGui/QImage>
@@ -96,6 +98,7 @@ private slots:
   void malformedEngineMessagesAreProtocolErrors();
   void repliesMustAnswerPostedRequestsInOrder();
   void oversizedEngineMessagesAreRejected();
+  void theMessageHelpersHandOverNothingOfTheWrongKind();
   void destroyingWhileBusyIsSafe();
   void diagPanicNeedsTheTestSwitch();
   void aPanicDiscardsTheSession();
@@ -316,18 +319,29 @@ void TestEngine::malformedEngineMessagesAreProtocolErrors() {
   QSignalSpy errors(engine.get(), &bayan::Engine::protocolError);
   QSignalSpy events(engine.get(), &bayan::Engine::eventReceived);
   QSignalSpy replies(engine.get(), &bayan::Engine::replyReceived);
-  // Each is wrong in the one way it names, and otherwise has the shape of a message the engine sends.
-  const QList<QPair<QByteArray, QString>> malformed{
-      {"not json"_ba, u"not JSON"_s},
-      {"[1, 2, 3]"_ba, u"not an object"_s},
-      {R"({"v":5,"type":"view.layout.progress","seq":1,"payload":{"doc_id":1,"pages_laid_out":1,"page_count_estimate":1,"complete":true}})"_ba,
-       u"another protocol version"_s},
-      {R"({"v":0,"seq":1,"payload":{}})"_ba, u"neither a type nor a reply"_s},
-      {R"({"v":0,"re":0,"ok":true,"payload":{}})"_ba, u"an invalid request identifier"_s},
-      {R"({"v":0,"re":3,"ok":"yes","payload":{}})"_ba, u"ok is not a boolean"_s},
+  // Each is wrong in the one place it names (deliverMalformed() checks that), and otherwise has the shape of a message the engine sends.
+  struct Malformed {
+    QByteArray json;
+    QString brokenAt;
+    QString why;
   };
-  for (const auto &[json, why] : malformed) {
-    QVERIFY(bayan::test::deliverMalformed(*engine, json, why));
+  const QList<Malformed> malformed{
+      {.json = "not json"_ba, .brokenAt = {}, .why = u"not JSON"_s},
+      {.json = "[1, 2, 3]"_ba, .brokenAt = {}, .why = u"not an object"_s},
+      {.json =
+           R"({"v":5,"type":"view.layout.progress","seq":1,"payload":{"doc_id":1,"pages_laid_out":1,"page_count_estimate":1,"complete":true}})"_ba,
+       .brokenAt = u"/v"_s,
+       .why = u"another protocol version"_s},
+      {.json = R"({"v":0,"seq":1,"payload":{"doc_id":1,"pages_laid_out":1,"page_count_estimate":1,"complete":true}})"_ba,
+       .brokenAt = u"/type"_s,
+       .why = u"no type, so neither an event nor a reply"_s},
+      {.json = R"({"v":0,"re":0,"ok":true,"payload":{}})"_ba, .brokenAt = u"/re"_s, .why = u"an invalid request identifier"_s},
+      {.json = R"({"v":0,"re":3,"ok":"yes","error":{"code":"internal","message_id":"engine-error-internal","args":{}}})"_ba,
+       .brokenAt = u"/ok"_s,
+       .why = u"ok is not a boolean"_s},
+  };
+  for (const auto &[json, brokenAt, why] : malformed) {
+    QVERIFY(bayan::test::deliverMalformed(*engine, json, brokenAt, why));
   }
   QTRY_COMPARE(errors.count(), malformed.size());
   QCOMPARE(events.count(), 0);
@@ -366,6 +380,61 @@ void TestEngine::oversizedEngineMessagesAreRejected() {
   bayan::test::deliverNothing(*engine);
   QTRY_COMPARE(errors.count(), 2);
   QCOMPARE(events.count(), 0);
+}
+
+void TestEngine::theMessageHelpersHandOverNothingOfTheWrongKind() {
+  // The helpers of tests/support/enginemessages.h refuse input that is not what they take: they return false and hand the wrapper nothing,
+  // so that no test can use a message the engine never sends where it means one it sends, or the other way round.
+  const auto engine = bayan::Engine::create();
+  QVERIFY(engine);
+  QSignalSpy errors(engine.get(), &bayan::Engine::protocolError);
+  QSignalSpy events(engine.get(), &bayan::Engine::eventReceived);
+  QSignalSpy replies(engine.get(), &bayan::Engine::replyReceived);
+
+  // Each refusal logs why; ignoring each message also checks that it was logged.
+  const auto refusal = [](const QString &pattern) { QTest::ignoreMessage(QtWarningMsg, QRegularExpression(u"^"_s + pattern)); };
+
+  // engine.error with its fields nested under error, as the tests used to write it: the engine never sends it.
+  const QJsonObject nested{
+      {u"error"_s, QJsonObject{{u"code"_s, u"internal"_s}, {u"message_id"_s, u"engine-error-internal"_s}, {u"args"_s, QJsonObject{}}}},
+      {u"recoverable"_s, true}};
+  const QJsonObject nestedError = bayan::test::engineEvent(u"engine.error"_s, nested);
+  refusal(u"The engine could not send"_s);
+  QVERIFY(!bayan::test::deliver(*engine, nestedError));
+  refusal(u"The engine could not send"_s);
+  QVERIFY(!bayan::test::emitEvent(*engine, u"engine.error"_s, nested));
+  refusal(u"The engine could not send"_s);
+  QVERIFY(!bayan::test::deliverOversized(*engine, nestedError, static_cast<std::size_t>(bayan::Engine::kMaxMessageBytes) + 1));
+
+  // A valid event is not malformed; nor is text broken in another place than the one named, or in more places than one; and only text that
+  // is not a JSON object is broken as a whole.
+  const QByteArray valid = QJsonDocument(progressEvent()).toJson(QJsonDocument::Compact);
+  refusal(u"Meant to be malformed"_s);
+  QVERIFY(!bayan::test::deliverMalformed(*engine, valid, u"/v"_s, u"nothing: it is valid"_s));
+  const QByteArray twice =
+      R"({"v":5,"type":"view.layout.progress","seq":1,"payload":{"doc_id":1,"pages_laid_out":"one","page_count_estimate":1,"complete":true}})"_ba;
+  refusal(u"Meant to be broken only at /v "_s);
+  QVERIFY(!bayan::test::deliverMalformed(*engine, twice, u"/v"_s, u"another protocol version, and a count that is a string"_s));
+  refusal(u"Meant to be broken only at /payload "_s);
+  QVERIFY(!bayan::test::deliverMalformed(*engine, twice, u"/payload"_s, u"the same, named by only one of its places"_s));
+  refusal(u"Meant to be broken only at \\(nothing\\)"_s);
+  QVERIFY(!bayan::test::deliverMalformed(*engine, R"({"v":5,"type":"view.layout.progress","seq":1,"payload":{}})"_ba, {}, u"not named"_s));
+  refusal(u"Meant to be broken at /v .*not a JSON object"_s);
+  QVERIFY(!bayan::test::deliverMalformed(*engine, "not json"_ba, u"/v"_s, u"not JSON, so broken as a whole"_s));
+
+  // A claimed length within the limit, here the message's own, is not oversized.
+  refusal(u"The claimed length \\d+ is not over the limit"_s);
+  QVERIFY(!bayan::test::deliverOversized(*engine, progressEvent(), static_cast<std::size_t>(valid.size())));
+
+  // Deliveries arrive in order: once this last, valid event has arrived, so has anything that was handed over before it.
+  const QJsonObject last = bayan::test::engineEvent(
+      u"view.layout.progress"_s,
+      QJsonObject{{u"doc_id"_s, 42}, {u"pages_laid_out"_s, 1}, {u"page_count_estimate"_s, 1}, {u"complete"_s, true}});
+  QVERIFY(bayan::test::deliver(*engine, last));
+  QTRY_VERIFY(!events.isEmpty() && events.constLast().at(1).toJsonObject().value(u"doc_id"_s) == QJsonValue(42));
+  QCOMPARE(events.count(), 1);
+  QCOMPARE(replies.count(), 0);
+  QCOMPARE(errors.count(), 0);
 }
 
 void TestEngine::destroyingWhileBusyIsSafe() {

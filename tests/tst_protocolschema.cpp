@@ -58,6 +58,7 @@ private slots:
   void rejectsAnUnknownFieldWhereTheSchemaForbidsOne();
   void rejectsWhatTheEngineNeverSends();
   void checksRepliesAgainstTheirRequest();
+  void checksTheTypeOfEachReply();
   void numbersFollowTheirRustTypes();
   void alternativesAndBooleanSchemas();
   void refusesASchemaWithAKeywordItDoesNotImplement();
@@ -71,6 +72,11 @@ void TestProtocolSchema::loadsTheEngineProtocolSchema() {
   QCOMPARE(schema().replyDefinition(u"view.set"_s), u"Empty"_s);
   QCOMPARE(schema().replyDefinition(u"query.a11y"_s), u"A11yTree"_s);
   QCOMPARE(schema().replyDefinition(u"view.pages"_s), QString()); // an event, not a request
+  // Only the replies to hello and doc.open have a type of their own (reply_type).
+  QCOMPARE(schema().replyType(u"hello"_s), u"welcome"_s);
+  QCOMPARE(schema().replyType(u"doc.open"_s), u"doc.opened"_s);
+  QCOMPARE(schema().replyType(u"view.set"_s), QString());
+  QCOMPARE(schema().replyType(u"query.a11y"_s), QString());
 }
 
 void TestProtocolSchema::acceptsTheEnginesMessages() {
@@ -185,6 +191,65 @@ void TestProtocolSchema::checksRepliesAgainstTheirRequest() {
   // An empty payload is not a welcome, and a request type without a reply cannot be answered successfully.
   QVERIFY(mentions(schema().problemsOfMessageFromEngine(empty, u"hello"_s), u"/payload"_s, u"lacks the required field protocol_version"_s));
   QVERIFY(!schema().problemsOfMessageFromEngine(empty, u"no.such.message"_s).isEmpty());
+}
+
+void TestProtocolSchema::checksTheTypeOfEachReply() {
+  // A successful reply carries the type that x-bayan-messages gives the reply to its request (reply_type), and none where it gives none,
+  // as bayan-core's engine sends it (Outbox::reply) and the stub does.
+  const auto reply = [](const QJsonObject &payload, const QJsonValue &type) {
+    QJsonObject message{{u"v"_s, 0}, {u"re"_s, 1}, {u"ok"_s, true}, {u"payload"_s, payload}};
+    if (!type.isUndefined()) {
+      message.insert(u"type"_s, type);
+    }
+    return message;
+  };
+  const QJsonObject welcome{{u"protocol_version"_s, 0},
+                            {u"engine_version"_s, u"0.1.0"_s},
+                            {u"layout_epoch"_s, 0},
+                            {u"features"_s, QJsonArray{u"mock_document"_s}}};
+  const QJsonObject opened{{u"doc_id"_s, 1},
+                           {u"page_count_estimate"_s, 1},
+                           {u"warnings"_s, QJsonArray{}},
+                           {u"fonts"_s, QJsonObject{{u"missing"_s, QJsonArray{}}, {u"machine_dependent"_s, false}}}};
+  QCOMPARE(schema().problemsOfMessageFromEngine(reply(welcome, u"welcome"_s), u"hello"_s), QStringList());
+  QCOMPARE(schema().problemsOfMessageFromEngine(reply(opened, u"doc.opened"_s), u"doc.open"_s), QStringList());
+  QCOMPARE(schema().problemsOfMessageFromEngine(reply(QJsonObject{}, QJsonValue::Undefined), u"view.set"_s), QStringList());
+
+  // A valid welcome with the type of another reply, or with none, is not the reply to hello; nor is a reply to view.set that has a type.
+  const QJsonObject mistyped = reply(welcome, u"doc.opened"_s);
+  QVERIFY(mentions(schema().problemsOfMessageFromEngine(mistyped, u"hello"_s), u"/type"_s, u"not \"welcome\""_s));
+  QCOMPARE(schema().placesOfProblemsOfMessageFromEngine(mistyped, u"hello"_s), QStringList{u"/type"_s});
+  const QJsonObject untyped = reply(welcome, QJsonValue::Undefined);
+  QVERIFY(mentions(schema().problemsOfMessageFromEngine(untyped, u"hello"_s), u"(the whole value)"_s, u"lacks the field type"_s));
+  QCOMPARE(schema().placesOfProblemsOfMessageFromEngine(untyped, u"hello"_s), QStringList{u"/type"_s});
+  const QJsonObject typedEmpty = reply(QJsonObject{}, u"welcome"_s);
+  QVERIFY(mentions(schema().problemsOfMessageFromEngine(typedEmpty, u"view.set"_s), u"/type"_s, u"has no type"_s));
+  QCOMPARE(schema().placesOfProblemsOfMessageFromEngine(typedEmpty, u"view.set"_s), QStringList{u"/type"_s});
+  // The typed ones could not come from the engine in reply to any request; the well-typed welcome could. So could the untyped one, but only
+  // as the reply to a request such as view.set, whose payload (Empty) may hold any fields (engine protocol §4).
+  QVERIFY(!schema().couldComeFromEngine(mistyped));
+  QVERIFY(!schema().couldComeFromEngine(typedEmpty));
+  QVERIFY(schema().couldComeFromEngine(reply(welcome, u"welcome"_s)));
+  QVERIFY(schema().couldComeFromEngine(untyped));
+  QCOMPARE(schema().problemsOfMessageFromEngine(untyped, u"view.set"_s), QStringList());
+  // A type is a string in any reply.
+  QVERIFY(!schema().problemsOfMessageFromEngine(reply(welcome, 1), u"hello"_s).isEmpty());
+
+  // reply_type is read strictly: a string, on an entry that has a reply.
+  const QJsonObject thing{{u"Thing"_s, QJsonObject{}}};
+  const auto entry = [](const QJsonValue &replyType, bool withReply) {
+    QJsonObject result{{u"direction"_s, u"to_engine"_s}, {u"type"_s, u"thing.get"_s}, {u"payload"_s, u"#/$defs/Thing"_s}};
+    if (withReply) {
+      result.insert(u"reply"_s, u"#/$defs/Thing"_s);
+    }
+    result.insert(u"reply_type"_s, replyType);
+    return result;
+  };
+  for (const QJsonObject &wrong : {entry(3, true), entry(u""_s, true), entry(u"thing"_s, false)}) {
+    QVERIFY(mentions(loadProblems(QJsonObject{{u"$defs"_s, thing}, {u"x-bayan-messages"_s, QJsonArray{wrong}}}),
+                     u"#/x-bayan-messages (thing.get)"_s, u"reply_type"_s));
+  }
+  QCOMPARE(loadProblems(QJsonObject{{u"$defs"_s, thing}, {u"x-bayan-messages"_s, QJsonArray{entry(u"thing"_s, true)}}}), QStringList());
 }
 
 void TestProtocolSchema::numbersFollowTheirRustTypes() {
