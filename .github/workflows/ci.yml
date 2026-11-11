@@ -8,6 +8,8 @@
 # a stand-in built from the stub engine, and the real engine, which scripts/build-engine-sdk.sh builds from the bayan-core commit pinned in
 # deps/bayan-core.json (ADR-0002 §4, Phase 0) with the Rust version that commit pins, installed by the runner's rustup, and the crates of its
 # Cargo.lock. The real engine's mock document is what the typing, input-method and accessibility tests of DESK-002 need.
+# The sanitizer job runs every test against the stub engine under AddressSanitizer and UndefinedBehaviorSanitizer, and then the tests that use
+# the engine against the real engine under them too (DESK-003), where the engine's thread calls the shell's callback.
 name: CI
 
 on:
@@ -107,9 +109,20 @@ jobs:
       - name: The pinned Qt release is at least 24 hours old (ADR-0017 rule 4), checked before Qt is installed and its tools run in the build
         run: '"$PYTHON" scripts/check-qt-release-age.py'
       - name: Install pinned tools and Qt
+        id: tools
         run: scripts/dev-setup.sh
-      - name: Sanitizer build and tests
+      - name: Sanitizer build and tests (every test, against the stub engine)
         run: cmake --workflow --preset asan
+      # The real engine's two steps run even when the stub's failed, so that every run reports both; the job fails if any step fails.
+      - name: Build the bayan-core C SDK from the commit pinned in deps/bayan-core.json
+        id: engine-sdk
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        run: scripts/build-engine-sdk.sh
+      - name: Real engine under the sanitizers (CORE-007's mock document; build and engine tests with BAYAN_ENGINE=sdk, none of them skipped)
+        if: ${{ !cancelled() && steps.engine-sdk.outcome == 'success' }}
+        env:
+          BAYAN_REQUIRE_MOCK_DOCUMENT: '1'
+        run: scripts/test-engine-sdk.sh --sdk build/bayan-core-sdk --sanitizers
 
   macos:
     name: macOS (arm64) · build and test

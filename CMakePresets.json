@@ -68,6 +68,13 @@
       "description": "As engine-sdk, on Windows; run from a Visual Studio developer environment (x64).",
       "inherits": "msvc",
       "cacheVariables": { "BAYAN_ENGINE": "sdk", "BAYAN_ENGINE_SDK_DIR": "$env{BAYAN_ENGINE_SDK_DIR}" }
+    },
+    {
+      "name": "engine-sdk-asan",
+      "displayName": "Against the bayan-core C SDK, with AddressSanitizer and UndefinedBehaviorSanitizer (Linux)",
+      "description": "As asan, but links the engine from the C SDK at the directory in the BAYAN_ENGINE_SDK_DIR environment variable, as engine-sdk does. The engine's library is not instrumented; the sanitizers watch the shell's side of the boundary: its callback on the engine thread, the copies it makes there and the hand-over to Qt's main thread.",
+      "inherits": "asan",
+      "cacheVariables": { "BAYAN_ENGINE": "sdk", "BAYAN_ENGINE_SDK_DIR": "$env{BAYAN_ENGINE_SDK_DIR}" }
     }
   ],
   "buildPresets": [
@@ -83,7 +90,8 @@
     { "name": "asan", "configurePreset": "asan" },
     { "name": "msvc", "configurePreset": "msvc" },
     { "name": "engine-sdk", "configurePreset": "engine-sdk" },
-    { "name": "engine-sdk-msvc", "configurePreset": "engine-sdk-msvc" }
+    { "name": "engine-sdk-msvc", "configurePreset": "engine-sdk-msvc" },
+    { "name": "engine-sdk-asan", "configurePreset": "engine-sdk-asan" }
   ],
   "testPresets": [
     {
@@ -114,7 +122,13 @@
       "filter": { "include": { "name": "^(engine|app)\\." } }
     },
     { "name": "engine-sdk", "inherits": "engine-sdk-base", "configurePreset": "engine-sdk" },
-    { "name": "engine-sdk-msvc", "inherits": "engine-sdk-base", "configurePreset": "engine-sdk-msvc" }
+    { "name": "engine-sdk-msvc", "inherits": "engine-sdk-base", "configurePreset": "engine-sdk-msvc" },
+    {
+      "name": "engine-sdk-asan",
+      "description": "The tests that use the engine (engine-sdk-base), with the sanitizers' settings of the asan preset.",
+      "inherits": ["engine-sdk-base", "asan"],
+      "configurePreset": "engine-sdk-asan"
+    }
   ],
   "workflowPresets": [
     {
@@ -178,6 +192,15 @@
         { "type": "configure", "name": "engine-sdk-msvc" },
         { "type": "build", "name": "engine-sdk-msvc" },
         { "type": "test", "name": "engine-sdk-msvc" }
+      ]
+    },
+    {
+      "name": "engine-sdk-asan",
+      "displayName": "Sanitizer build and test against the C SDK at $BAYAN_ENGINE_SDK_DIR (Linux)",
+      "steps": [
+        { "type": "configure", "name": "engine-sdk-asan" },
+        { "type": "build", "name": "engine-sdk-asan" },
+        { "type": "test", "name": "engine-sdk-asan" }
       ]
     }
   ]
