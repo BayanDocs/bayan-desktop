@@ -37,3 +37,5 @@ install(TARGETS bayan_ffi
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib)
 install(FILES "${desktop_dir}/src/engine/stub/include/bayan_ffi.h" DESTINATION include)
+# The real SDK also holds the protocol's JSON Schema, which the test engine.sdk_copies compares with the copy in src/engine/stub/schema.
+install(FILES "${desktop_dir}/src/engine/stub/schema/engine-protocol.schema.json" DESTINATION schema)

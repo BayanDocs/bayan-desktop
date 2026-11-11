@@ -3,6 +3,7 @@
 // the real engine, whose pixels tst_canvas compares with the engine's own rendering.
 
 #include "engine.h"
+#include "enginemessages.h"
 
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
@@ -43,13 +44,22 @@ QJsonObject pageRequest(qint64 x, qint64 y, qint64 width, qint64 height) {
                      {u"mode"_s, u"interactive"_s}};
 }
 
-// Hands JSON to the wrapper the way the engine's callback does. <claimedLength> lets a test lie about the size.
-void deliver(bayan::Engine &engine, const QByteArray &json, std::size_t claimedLength) {
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): the C interface passes UTF-8 as bytes.
-  engine.deliverFromEngineThread(reinterpret_cast<const std::uint8_t *>(json.constData()), claimedLength);
+// An event the engine sends, for the tests that hand the wrapper messages as if from the engine (tests/support/enginemessages.h).
+QJsonObject progressEvent() {
+  return bayan::test::engineEvent(
+      u"view.layout.progress"_s,
+      QJsonObject{{u"doc_id"_s, 1}, {u"pages_laid_out"_s, 1}, {u"page_count_estimate"_s, 1}, {u"complete"_s, true}});
 }
 
-void deliver(bayan::Engine &engine, const QByteArray &json) { deliver(engine, json, static_cast<std::size_t>(json.size())); }
+// What the engine answers a request of the type no.such.message, which the tests below post.
+QJsonObject unsupportedReply(qint64 requestId) {
+  return QJsonObject{{u"v"_s, bayan::Engine::kProtocolVersion},
+                     {u"re"_s, requestId},
+                     {u"ok"_s, false},
+                     {u"error"_s, QJsonObject{{u"code"_s, u"unsupported_message"_s},
+                                              {u"message_id"_s, u"engine-error-unsupported-message"_s},
+                                              {u"args"_s, QJsonObject{{u"type"_s, u"no.such.message"_s}}}}}};
+}
 
 // Waits for the reply to one request and returns its arguments (requestId, ok, payload, error).
 QList<QVariant> waitForReply(QSignalSpy &spy, qint64 requestId) {
@@ -290,12 +300,13 @@ void TestEngine::deliveriesFromAnotherThreadArriveOnTheMainThread() {
   QSignalSpy events(engine.get(), &bayan::Engine::eventReceived);
 
   // Play the engine thread: deliver a message from a different thread, as the engine's callback does.
-  const QByteArray json = R"({"v":0,"type":"diag.log","seq":1,"payload":{"level":"info"}})"_ba;
-  std::thread engineThread([&engine, &json] { deliver(*engine, json); });
+  bool delivered = false;
+  std::thread engineThread([&engine, &delivered] { delivered = bayan::test::deliver(*engine, progressEvent()); });
   engineThread.join();
+  QVERIFY(delivered);
   QCOMPARE(events.count(), 0); // Nothing is emitted on the engine thread itself.
   QTRY_COMPARE(events.count(), 1);
-  QCOMPARE(events.at(0).at(0).toString(), u"diag.log"_s);
+  QCOMPARE(events.at(0).at(0).toString(), u"view.layout.progress"_s);
   QCOMPARE(eventThread, QThread::currentThread());
 }
 
@@ -305,16 +316,18 @@ void TestEngine::malformedEngineMessagesAreProtocolErrors() {
   QSignalSpy errors(engine.get(), &bayan::Engine::protocolError);
   QSignalSpy events(engine.get(), &bayan::Engine::eventReceived);
   QSignalSpy replies(engine.get(), &bayan::Engine::replyReceived);
-  const QList<QByteArray> malformed{
-      "not json"_ba,
-      "[1, 2, 3]"_ba,
-      R"({"v":5,"type":"view.pages","payload":{}})"_ba, // another protocol version
-      R"({"v":0,"payload":{}})"_ba,                     // neither a type nor a reply
-      R"({"v":0,"re":0,"ok":true})"_ba,                 // invalid request identifier
-      R"({"v":0,"re":3,"ok":"yes"})"_ba,                // ok is not a boolean
+  // Each is wrong in the one way it names, and otherwise has the shape of a message the engine sends.
+  const QList<QPair<QByteArray, QString>> malformed{
+      {"not json"_ba, u"not JSON"_s},
+      {"[1, 2, 3]"_ba, u"not an object"_s},
+      {R"({"v":5,"type":"view.layout.progress","seq":1,"payload":{"doc_id":1,"pages_laid_out":1,"page_count_estimate":1,"complete":true}})"_ba,
+       u"another protocol version"_s},
+      {R"({"v":0,"seq":1,"payload":{}})"_ba, u"neither a type nor a reply"_s},
+      {R"({"v":0,"re":0,"ok":true,"payload":{}})"_ba, u"an invalid request identifier"_s},
+      {R"({"v":0,"re":3,"ok":"yes","payload":{}})"_ba, u"ok is not a boolean"_s},
   };
-  for (const QByteArray &json : malformed) {
-    deliver(*engine, json);
+  for (const auto &[json, why] : malformed) {
+    QVERIFY(bayan::test::deliverMalformed(*engine, json, why));
   }
   QTRY_COMPARE(errors.count(), malformed.size());
   QCOMPARE(events.count(), 0);
@@ -327,7 +340,7 @@ void TestEngine::repliesMustAnswerPostedRequestsInOrder() {
   QSignalSpy errors(engine.get(), &bayan::Engine::protocolError);
   QSignalSpy replies(engine.get(), &bayan::Engine::replyReceived);
   // A reply to a request that was never posted.
-  deliver(*engine, R"({"v":0,"re":1,"ok":true})"_ba);
+  QVERIFY(bayan::test::deliver(*engine, unsupportedReply(1)));
   QTRY_COMPARE(errors.count(), 1);
   QCOMPARE(replies.count(), 0);
   // The engine's own reply is accepted; a second reply to the same request, or one to a request answered already, is not.
@@ -337,7 +350,7 @@ void TestEngine::repliesMustAnswerPostedRequestsInOrder() {
   QVERIFY(!waitForReply(replies, second).isEmpty());
   const int answered = static_cast<int>(replies.count());
   for (const qint64 id : {second, first}) {
-    deliver(*engine, R"({"v":0,"re":)"_ba + QByteArray::number(id) + R"(,"ok":true})"_ba);
+    QVERIFY(bayan::test::deliver(*engine, unsupportedReply(id)));
   }
   QTRY_COMPARE(errors.count(), 3);
   QCOMPARE(replies.count(), answered);
@@ -348,10 +361,9 @@ void TestEngine::oversizedEngineMessagesAreRejected() {
   QVERIFY(engine);
   QSignalSpy errors(engine.get(), &bayan::Engine::protocolError);
   QSignalSpy events(engine.get(), &bayan::Engine::eventReceived);
-  const QByteArray json = R"({"v":0,"type":"diag.log","payload":{}})"_ba;
   // The length is checked before the bytes are read, so the claimed size is all that matters.
-  deliver(*engine, json, static_cast<std::size_t>(bayan::Engine::kMaxMessageBytes) + 1);
-  engine->deliverFromEngineThread(nullptr, 0);
+  QVERIFY(bayan::test::deliverOversized(*engine, progressEvent(), static_cast<std::size_t>(bayan::Engine::kMaxMessageBytes) + 1));
+  bayan::test::deliverNothing(*engine);
   QTRY_COMPARE(errors.count(), 2);
   QCOMPARE(events.count(), 0);
 }

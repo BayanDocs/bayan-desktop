@@ -40,9 +40,12 @@ endif()
 
 file(GLOB_RECURSE lint_sources CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/src/*.cpp" "${PROJECT_SOURCE_DIR}/tests/*.cpp")
 file(GLOB_RECURSE lint_headers CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/src/*.h" "${PROJECT_SOURCE_DIR}/tests/*.h")
+# The engine's C header is a byte-for-byte copy of the header that bayan-core generates with cbindgen (the test engine.sdk_copies compares it
+# with the SDK's), so it keeps cbindgen's formatting: clang-format neither checks nor changes it, as clang-tidy leaves it out (.clang-tidy).
+list(REMOVE_ITEM lint_headers "${PROJECT_SOURCE_DIR}/src/engine/stub/include/bayan_ffi.h")
 set(lint_build_targets bayan-desktop)
 if(BAYAN_BUILD_TESTS)
   list(APPEND lint_build_targets tst_engine tst_documentsession tst_canvas tst_interface tst_protocol tst_tiles tst_input tst_accessibletext
-       tst_restartallowance)
+       tst_restartallowance tst_protocolschema tst_cinterface)
 endif()
 bayan_add_lint_targets(SOURCES ${lint_sources} HEADERS ${lint_headers} BUILD_TARGETS ${lint_build_targets})

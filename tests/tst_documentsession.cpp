@@ -5,6 +5,7 @@
 
 #include "documentsession.h"
 #include "engine.h"
+#include "enginemessages.h"
 
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
@@ -47,15 +48,18 @@ int liveBlobs(bayan::Engine &engine) {
   return count;
 }
 
-// Hands a message to the engine wrapper as if the engine had sent it, to see what the session makes of messages the engine never sends.
-void deliver(bayan::Engine &engine, const QJsonObject &message) {
-  const QByteArray json = QJsonDocument(message).toJson(QJsonDocument::Compact);
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): the C interface passes UTF-8 as bytes.
-  engine.deliverFromEngineThread(reinterpret_cast<const std::uint8_t *>(json.constData()), static_cast<std::size_t>(json.size()));
-}
+// The tests hand the session messages as if from the engine only through tests/support/enginemessages.h, which checks each against the
+// protocol's JSON Schema: deliver() and emitEvent() for messages the engine could send, deliverMalformed() for input it could never send.
+using bayan::test::deliver;
+using bayan::test::deliverMalformed;
+using bayan::test::emitEvent;
+using bayan::test::engineEvent;
 
-QJsonObject engineEvent(const QString &type, const QJsonObject &payload) {
-  return QJsonObject{{u"v"_s, bayan::Engine::kProtocolVersion}, {u"type"_s, type}, {u"seq"_s, 1'000'000}, {u"payload"_s, payload}};
+QByteArray compact(const QJsonObject &message) { return QJsonDocument(message).toJson(QJsonDocument::Compact); }
+
+// A US Letter page as view.pages describes it, at the top of the view.
+QJsonObject letterPage(int index) {
+  return QJsonObject{{u"index"_s, index}, {u"width"_s, 15'544'800}, {u"height"_s, 20'116'800}, {u"section"_s, 0}, {u"x"_s, 0}, {u"y"_s, 0}};
 }
 
 // The configuration that lets diag.panic make the engine fail (engine protocol §3.3); the application never sets it.
@@ -364,10 +368,11 @@ void TestDocumentSession::unreadableAccessibilityUpdatesFetchTheTreeAgain() {
   // A change the session cannot apply (a node that is not in the tree): it drops the tree and asks for the whole of it again.
   const QJsonObject stranger{
       {u"id"_s, 999'999}, {u"role"_s, u"paragraph"_s}, {u"name"_s, QString()}, {u"text"_s, u"stranger"_s}, {u"children"_s, QJsonArray{}}};
-  deliver(*open->engine, engineEvent(u"a11y.update"_s,
-                                     QJsonObject{{u"doc_id"_s, session.documentId()},
-                                                 {u"changes"_s, QJsonArray{QJsonObject{{u"kind"_s, u"replace"_s}, {u"node"_s, stranger}}}},
-                                                 {u"caret"_s, QJsonValue::Null}}));
+  QVERIFY(deliver(
+      *open->engine,
+      engineEvent(u"a11y.update"_s, QJsonObject{{u"doc_id"_s, session.documentId()},
+                                                {u"changes"_s, QJsonArray{QJsonObject{{u"kind"_s, u"replace"_s}, {u"node"_s, stranger}}}},
+                                                {u"caret"_s, QJsonValue::Null}})));
   QTRY_VERIFY(!session.accessibilityTree());
   QTRY_VERIFY(session.accessibilityTree());
   QVERIFY(editableNode(session.accessibilityTree()) != nullptr);
@@ -379,7 +384,9 @@ void TestDocumentSession::malformedEventsFailTheSession() {
   QVERIFY(open);
   bayan::DocumentSession &session = *open->session;
   // A page list that is not a list: the session cannot trust the engine any more.
-  deliver(*open->engine, engineEvent(u"view.pages"_s, QJsonObject{{u"doc_id"_s, session.documentId()}, {u"pages"_s, u"three"_s}}));
+  QVERIFY(deliverMalformed(
+      *open->engine, compact(engineEvent(u"view.pages"_s, QJsonObject{{u"doc_id"_s, session.documentId()}, {u"pages"_s, u"three"_s}})),
+      u"pages is not a list"_s));
   QTRY_COMPARE(session.status(), Status::Failed);
   QCOMPARE(session.sendText(u"late"_s), 0);
 }
@@ -389,36 +396,50 @@ void TestDocumentSession::eventsForAnotherDocumentAreIgnored() {
   QVERIFY(open);
   bayan::DocumentSession &session = *open->session;
   QSignalSpy invalidated(&session, &bayan::DocumentSession::invalidated);
-  deliver(*open->engine, engineEvent(u"view.pages"_s, QJsonObject{{u"doc_id"_s, session.documentId() + 1}, {u"pages"_s, u"three"_s}}));
-  deliver(*open->engine,
-          engineEvent(u"render.invalidate"_s, QJsonObject{{u"doc_id"_s, session.documentId() + 1}, {u"regions"_s, QJsonArray{}}}));
+  QSignalSpy pagesChanged(&session, &bayan::DocumentSession::pagesChanged);
+  const int pages = session.pageCount();
+  const qint64 other = session.documentId() + 1;
+  // The pages and redrawn regions of another document change nothing here.
+  QVERIFY(deliver(*open->engine,
+                  engineEvent(u"view.pages"_s, QJsonObject{{u"doc_id"_s, other}, {u"pages"_s, QJsonArray{letterPage(0), letterPage(1)}}})));
+  const QJsonObject region{{u"page"_s, 0}, {u"rect"_s, QJsonObject{{u"x"_s, 0}, {u"y"_s, 0}, {u"width"_s, 100}, {u"height"_s, 100}}}};
+  QVERIFY(
+      deliver(*open->engine, engineEvent(u"render.invalidate"_s, QJsonObject{{u"doc_id"_s, other}, {u"regions"_s, QJsonArray{region}}})));
+  // The session does not even read an event about another document: one it could not read does not stop it.
+  QVERIFY(deliverMalformed(*open->engine,
+                           compact(engineEvent(u"view.pages"_s, QJsonObject{{u"doc_id"_s, other}, {u"pages"_s, u"three"_s}})),
+                           u"pages is not a list"_s));
   QTest::qWait(100);
   QCOMPARE(session.status(), Status::Ready);
   QCOMPARE(invalidated.count(), 0);
+  QCOMPARE(pagesChanged.count(), 0);
+  QCOMPARE(session.pageCount(), pages);
 }
 
 void TestDocumentSession::onlyUnrecoverableEngineErrorsRestartTheSession() {
   // A fake engine.error, from either engine: only recoverable decides, anything but true counts as false (engine protocol §12.1), and
-  // nothing of the error reaches the message, here markup that a document might have made the engine repeat.
+  // nothing of the error reaches the message, here markup that a document might have made the engine repeat. The schema lets the engine
+  // send any text as the message identifier and as an argument, but only its own codes.
   const auto open = openSession();
   QVERIFY(open);
   bayan::Engine &engine = *open->engine;
   bayan::DocumentSession &session = *open->session;
   QSignalSpy closed(&session, &bayan::DocumentSession::documentClosed);
-  const QJsonObject hostile{{u"code"_s, u"<b>marker</b>"_s},
+  const QJsonObject hostile{{u"code"_s, u"internal"_s},
                             {u"message_id"_s, u"engine-error-<img src=x>"_s},
-                            {u"args"_s, QJsonObject{{u"type"_s, u"marker"_s}}}};
+                            {u"args"_s, QJsonObject{{u"type"_s, u"<b>marker</b>"_s}}}};
   QJsonObject recoverable = hostile;
   recoverable.insert(u"recoverable"_s, true);
-  deliver(engine, engineEvent(u"engine.error"_s, recoverable));
+  QVERIFY(deliver(engine, engineEvent(u"engine.error"_s, recoverable)));
   QTest::qWait(100);
   QCOMPARE(session.status(), Status::Ready);
   QVERIFY(session.message().isEmpty());
 
-  // The string "true" is not true: the engine discarded its session. The document closes, and is not reopened.
+  // The string "true" is not true: the engine discarded its session. The document closes, and is not reopened. The engine never sends
+  // either of these two errors, but the shell must not trust that it cannot.
   QJsonObject notTrue = hostile;
   notTrue.insert(u"recoverable"_s, u"true"_s);
-  deliver(engine, engineEvent(u"engine.error"_s, notTrue));
+  QVERIFY(deliverMalformed(engine, compact(engineEvent(u"engine.error"_s, notTrue)), u"recoverable is a string"_s));
   const qint64 hello = waitForRestart(*open->replies, engine, session, restarted(1, closedNow));
   QVERIFY(hello > 0);
   QCOMPARE(closed.count(), 1);
@@ -431,7 +452,7 @@ void TestDocumentSession::onlyUnrecoverableEngineErrorsRestartTheSession() {
   QCOMPARE(engine.lastPostedRequest(), hello);
 
   // Without recoverable at all: the same, and the document is still closed.
-  deliver(engine, engineEvent(u"engine.error"_s, hostile));
+  QVERIFY(deliverMalformed(engine, compact(engineEvent(u"engine.error"_s, hostile)), u"recoverable is missing"_s));
   QVERIFY(waitForRestart(*open->replies, engine, session, restarted(2, stillClosed)) > 0);
   QCOMPARE(closed.count(), 1);
   QCOMPARE(liveBlobs(engine), 0);
@@ -537,11 +558,16 @@ void TestDocumentSession::aFailureBeforeTheDocumentWasEverOpenOffersToOpenIt() {
   // hands the session an unrecoverable engine.error just before the welcome reaches it, when it has not sent doc.open yet. The welcome
   // then answers a hello of the discarded session, and must be ignored.
   bool failed = false;
+  bool emitted = false;
   QObject::connect(engine.get(), &bayan::Engine::replyReceived, engine.get(),
-                   [&failed, &engine](qint64, bool, const QJsonObject &, const QJsonObject &) {
+                   [&failed, &emitted, &engine](qint64, bool, const QJsonObject &, const QJsonObject &) {
                      if (!failed) {
                        failed = true;
-                       emit engine->eventReceived(u"engine.error"_s, QJsonObject{{u"recoverable"_s, false}});
+                       emitted = emitEvent(*engine, u"engine.error"_s,
+                                           QJsonObject{{u"code"_s, u"panic"_s},
+                                                       {u"message_id"_s, u"engine-error-panic"_s},
+                                                       {u"recoverable"_s, false},
+                                                       {u"args"_s, QJsonObject{}}});
                      }
                    });
   const ReplyLog replies(*engine);
@@ -549,6 +575,7 @@ void TestDocumentSession::aFailureBeforeTheDocumentWasEverOpenOffersToOpenIt() {
   QSignalSpy closed(&session, &bayan::DocumentSession::documentClosed);
   session.start();
   const qint64 hello = waitForRestart(replies, *engine, session, restarted(1, notOpenedYet));
+  QVERIFY(emitted);
   QVERIFY(hello > 0);
   QCOMPARE(session.offer(), bayan::DocumentSession::Offer::Open);
   QCOMPARE(closed.count(), 0);
@@ -612,8 +639,10 @@ void TestDocumentSession::leftoversOfTheFailedSessionAreIgnored() {
   QTest::qWait(200);
   QCOMPARE(session.status(), Status::Closed);
   QCOMPARE(refused.count(), 0);
-  // Late events about the old session's document change nothing either.
-  deliver(engine, engineEvent(u"view.pages"_s, QJsonObject{{u"doc_id"_s, 1}, {u"pages"_s, u"three"_s}}));
+  // Late events about the old session's document change nothing either, whether the session could read them or not.
+  QVERIFY(deliver(engine, engineEvent(u"view.pages"_s, QJsonObject{{u"doc_id"_s, 1}, {u"pages"_s, QJsonArray{letterPage(0)}}})));
+  QVERIFY(deliverMalformed(engine, compact(engineEvent(u"view.pages"_s, QJsonObject{{u"doc_id"_s, 1}, {u"pages"_s, u"three"_s}})),
+                           u"pages is not a list"_s));
   QTest::qWait(100);
   QCOMPARE(session.status(), Status::Closed);
   QCOMPARE(session.pageCount(), 0);

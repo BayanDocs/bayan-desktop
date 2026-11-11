@@ -1,13 +1,46 @@
+# The tests' strict checker of the engine protocol's JSON Schema, with the copy of the schema from src/engine/stub/schema compiled in as the
+# resource :/bayan/test/engine-protocol.schema.json, and the helpers through which every test hands the shell messages as if from the engine,
+# which check each message against it first (DESK-003).
+add_library(bayan_protocol_schema STATIC support/protocolschema.cpp support/protocolschema.h)
+target_include_directories(bayan_protocol_schema PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/support")
+target_link_libraries(bayan_protocol_schema PUBLIC Qt6::Core PRIVATE bayan::compile_options)
+qt_add_resources(bayan_protocol_schema protocol_schema
+  PREFIX "/bayan/test"
+  BASE "${PROJECT_SOURCE_DIR}/src/engine/stub/schema"
+  FILES "${PROJECT_SOURCE_DIR}/src/engine/stub/schema/engine-protocol.schema.json")
+add_library(bayan_engine_messages STATIC support/enginemessages.cpp support/enginemessages.h)
+target_link_libraries(bayan_engine_messages PUBLIC bayan_protocol_schema bayan_engine PRIVATE bayan::compile_options)
+
 # Unit tests for the engine wrapper, run against the stub engine.
 qt_add_executable(tst_engine tst_engine.cpp)
-target_link_libraries(tst_engine PRIVATE bayan_engine Qt6::Test bayan::compile_options)
+target_link_libraries(tst_engine PRIVATE bayan_engine bayan_engine_messages Qt6::Test bayan::compile_options)
 qt_import_plugins(tst_engine EXCLUDE_BY_TYPE permissions) # See src/CMakeLists.txt.
 bayan_deploy_engine_runtime(tst_engine)
 add_test(NAME engine.wrapper COMMAND tst_engine)
 
+# Tests of the engine's C interface itself (bayan_ffi.h), with a callback of their own, against the engine the build links: what the stub must
+# do as the real engine does (BAYAN_STATUS_WRONG_THREAD inside callbacks, tiles in order with messages, freeing inside the callback), and
+# every kind of message the engine sends, checked against the protocol's JSON Schema.
+qt_add_executable(tst_cinterface tst_cinterface.cpp)
+target_link_libraries(tst_cinterface PRIVATE bayan_engine_c bayan_protocol_schema Qt6::Test bayan::compile_options)
+qt_import_plugins(tst_cinterface EXCLUDE_BY_TYPE permissions) # See src/CMakeLists.txt.
+bayan_deploy_engine_runtime(tst_cinterface)
+add_test(NAME engine.c_interface COMMAND tst_cinterface)
+
+# With an SDK engine: the copies of the SDK's C header and JSON Schema in src/engine/stub must be byte for byte the SDK's, so that moving the
+# bayan-core pin without updating them fails (src/engine/README.md).
+if(BAYAN_ENGINE STREQUAL "sdk")
+  add_test(NAME engine.sdk_copies
+    COMMAND "${CMAKE_COMMAND}"
+      -D "SDK_DIR=${BAYAN_ENGINE_SDK_DIR}"
+      -D "COPY_DIR=${PROJECT_SOURCE_DIR}/src/engine/stub"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/engine-sdk/compare-copies.cmake")
+  set_tests_properties(engine.sdk_copies PROPERTIES TIMEOUT 60)
+endif()
+
 # Unit tests for the document session (src/app).
 qt_add_executable(tst_documentsession tst_documentsession.cpp)
-target_link_libraries(tst_documentsession PRIVATE bayan_shell Qt6::Test bayan::compile_options)
+target_link_libraries(tst_documentsession PRIVATE bayan_shell bayan_engine_messages Qt6::Test bayan::compile_options)
 qt_import_plugins(tst_documentsession EXCLUDE_BY_TYPE permissions) # See src/CMakeLists.txt.
 bayan_deploy_engine_runtime(tst_documentsession)
 add_test(NAME app.document_session COMMAND tst_documentsession)
@@ -42,11 +75,17 @@ foreach(unit IN ITEMS protocol tiles input accessibletext restartallowance)
   set_tests_properties(unit.${unit} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1" TIMEOUT 60)
 endforeach()
 
+# Unit tests of the tests' checker of the engine protocol's JSON Schema (support/protocolschema.h), which needs no engine.
+qt_add_executable(tst_protocolschema tst_protocolschema.cpp)
+target_link_libraries(tst_protocolschema PRIVATE bayan_protocol_schema Qt6::Test bayan::compile_options)
+add_test(NAME unit.protocol_schema COMMAND tst_protocolschema)
+set_tests_properties(unit.protocol_schema PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1" TIMEOUT 60)
+
 # Headless smoke test: the application starts with the offscreen platform plugin, shows the engine's first page, checks its pixels and exits.
 add_test(NAME app.smoke COMMAND bayan-desktop --smoke-test)
 
 # Every test runs without a screen and with Qt's standard settings, whatever the developer's environment says.
-set_tests_properties(engine.wrapper app.document_session app.canvas app.interface app.smoke PROPERTIES
+set_tests_properties(engine.wrapper engine.c_interface app.document_session app.canvas app.interface app.smoke PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1"
   TIMEOUT 120)
 set_tests_properties(app.canvas_scale125 PROPERTIES
