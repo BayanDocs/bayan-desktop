@@ -78,6 +78,7 @@ endforeach()
 # Unit tests of the tests' checker of the engine protocol's JSON Schema (support/protocolschema.h), which needs no engine.
 qt_add_executable(tst_protocolschema tst_protocolschema.cpp)
 target_link_libraries(tst_protocolschema PRIVATE bayan_protocol_schema Qt6::Test bayan::compile_options)
+qt_import_plugins(tst_protocolschema EXCLUDE_BY_TYPE permissions) # See src/CMakeLists.txt.
 add_test(NAME unit.protocol_schema COMMAND tst_protocolschema)
 set_tests_properties(unit.protocol_schema PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1" TIMEOUT 60)
 
