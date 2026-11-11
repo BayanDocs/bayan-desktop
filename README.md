@@ -34,7 +34,7 @@ The sanitizer build (`cmake --workflow --preset asan`, Linux) runs the tests wit
 - Desktop decision: [ADR-0013](https://github.com/BayanDocs/docs/blob/HEAD/adr/0013-desktop-shell.md); engine boundary: [ADR-0012](https://github.com/BayanDocs/docs/blob/HEAD/adr/0012-engine-boundary.md) and the [engine protocol](https://github.com/BayanDocs/docs/blob/HEAD/specs/engine-protocol.md)
 - Work packages: [docs/workpackages](https://github.com/BayanDocs/docs/tree/HEAD/workpackages)
 
-Contributors and agents: start with [AGENTS.md](AGENTS.md).
+Contributors and agents: start with [AGENTS.md](AGENTS.md). The developer guide's page [Developing bayan-desktop](https://github.com/BayanDocs/docs/blob/HEAD/developer/bayan-desktop.md) shows how to set up a development machine and run the verification gate, and how this repository fits with the others.
 
 ## License
 
