@@ -64,6 +64,9 @@ BayanStatus renderTile(BayanEngine *engine) {
 
 QJsonObject helloPayload() { return QJsonObject{{u"protocol_versions"_s, QJsonArray{0}}}; }
 
+// The identifier of the view.set request in freeingInsideTheCallbackDeliversNothingMore, after hello (1) and doc.open (2).
+constexpr qint64 kViewRequest = 3;
+
 // An engine created through the C interface, with a callback that keeps every message it receives. A test can also run code of its own
 // inside the callback (onMessage), on the engine thread.
 class RawEngine {
@@ -253,14 +256,13 @@ void TestCInterface::freeingInsideTheCallbackDeliversNothingMore() {
   QVERIFY(succeeds(*engine, engine->request(u"doc.open"_s, QJsonObject{{u"blob"_s, blob}})));
   std::atomic<bool> freed{false};
   std::atomic<bool> calledAfterFree{false};
-  const qint64 view = 3;
   RawEngine *raw = engine.get();
-  engine->onMessage = [&freed, &calledAfterFree, raw, view](BayanEngine *self, const QJsonObject &message) {
+  engine->onMessage = [&freed, &calledAfterFree, raw](BayanEngine *self, const QJsonObject &message) {
     if (freed) {
       calledAfterFree = true;
       return;
     }
-    if (message.value(u"re"_s).toInteger(0) == view) {
+    if (message.value(u"re"_s).toInteger(0) == kViewRequest) {
       raw->markFreedInCallback();
       bayan_engine_free(self);
       freed = true;
@@ -273,11 +275,11 @@ void TestCInterface::freeingInsideTheCallbackDeliversNothingMore() {
                                                       {u"device_scale"_s, 1.0},
                                                       {u"mode"_s, u"print"_s},
                                                       {u"show_formatting_marks"_s, false}}),
-           view);
+           kViewRequest);
   QTRY_VERIFY(freed);
   QTest::qWait(300);
   QVERIFY(!calledAfterFree);
-  QCOMPARE(engine->received().last().value(u"re"_s).toInteger(), view);
+  QCOMPARE(engine->received().last().value(u"re"_s).toInteger(), kViewRequest);
 }
 
 void TestCInterface::everyMessageOfTheEngineMatchesTheSchema() {
