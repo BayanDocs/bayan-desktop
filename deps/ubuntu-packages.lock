@@ -156,7 +156,7 @@ unpack python3-setuptools-whl 68.1.2-2ubuntu1.2 all pool/universe/s/setuptools/p
 unpack python3.12-venv 3.12.3-1ubuntu0.17 amd64 pool/universe/p/python3.12/python3.12-venv_3.12.3-1ubuntu0.17_amd64.deb 5684 b8d4bfea3df63945b6a202bd0773caf7727dde86d2df91df6e88a8ccf7c18b7e
 unpack python3-venv 3.12.3-0ubuntu2.1 amd64 pool/universe/p/python3-defaults/python3-venv_3.12.3-0ubuntu2.1_amd64.deb 1032 16d50387b7656796b79e2c059d06774dfe9fe3f42808d8d50b332ceb780f508a
 unpack rustup 1.26.0-5ubuntu0.1 amd64 pool/universe/r/rustup/rustup_1.26.0-5ubuntu0.1_amd64.deb 2335980 3b17fa4ef92924156a01ba2cbfcbab4029ecb57c062da61da6a5a3f7541ef4e1
-unpack zstd 1.5.5+dfsg2-2build1.1 amd64 pool/main/libz/libzstd/zstd_1.5.5+dfsg2-2build1.1_amd64.deb 644020 d7667f83e3a2caeaaecaca464d542ee6ccf537259a479622796c84afc96d6032
+unpack zstd 1.5.5+dfsg2-2build1.1 amd64 pool/main/libz/libzstd/zstd_1.5.5+dfsg2-2build1.1_amd64.deb 644020 d7667f83e3a2caeaaecaca464d542ee6ccf537259a479622796c84afc96d6030
 configure libperl5.38t64 5.38.2-3.2ubuntu0.7
 configure perl 5.38.2-3.2ubuntu0.7
 configure perl-modules-5.38 5.38.2-3.2ubuntu0.7
