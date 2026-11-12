@@ -220,6 +220,12 @@ class Fetch(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertCacheHoldsEveryFile()
         self.assertEqual(self.report_counts()["launchpad"], 2)
+        # Each failed attempt is in the log with its error, so a summary that counts files from a later source can be explained.
+        for package in PACKAGES:
+            self.assertIn(
+                f"{package.file}: could not download from {self.server.url('snapshot')}/{SNAPSHOT}/{package.pool} (curl: (22)", result.stderr
+            )
+            self.assertIn("404); trying the next source", result.stderr)
         result = self.fetch(snapshot="missing", launchpad="missing", archive="serve")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.report_counts()["cache"], 2)  # the files of the first run are now in the cache folder
