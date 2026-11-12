@@ -1,6 +1,6 @@
 # Scans this repository with CodeQL, GitHub's static analysis, on every pull request, in the merge queue, on pushes to main and weekly, and uploads the results to GitHub code scanning (work packages X-002 and X-004). Alerts appear under Security → Code scanning, and a pull request shows the ones it would add.
 # Languages: GitHub Actions (the workflows), Python (scripts/, tests/ and the checks in .github/) and C++ (the app and its tests). The QML files are not scanned: CodeQL has no QML support.
-# C++ is analyzed while it is compiled, so the C++ analysis job, which like every analysis job here holds no write permission, builds the app with the same steps as ci.yml's Linux job: the Ubuntu packages from the frozen snapshot, the Qt release-age check before anything of Qt runs, scripts/dev-setup.sh for the hash-pinned CMake, Ninja and Qt, and the `ci` preset (the build only; the tests run in ci.yml). It uses the runner's own Python 3 (3.11 or newer is enough for scripts/dev-setup.sh), so nothing is downloaded that is not checked against a hash.
+# C++ is analyzed while it is compiled, so the C++ analysis job, which like every analysis job here holds no write permission, builds the app with the same steps as ci.yml's Linux job: in a container from the base image of deps/ubuntu-packages.lock, with the Ubuntu packages that lock lists (scripts/ubuntu-packages.sh fetches each file from the cache or a download, checks it against the lock's size and SHA-256, and installs them with dpkg; only runs on main save the cache, before anything is installed), the Qt release-age check before anything of Qt runs, scripts/dev-setup.sh for the hash-pinned CMake, Ninja and Qt, and the `ci` preset (the build only; the tests run in ci.yml). It uses the container's Python 3, Ubuntu 24.04's (3.11 or newer is enough for scripts/dev-setup.sh), so nothing is downloaded that is not checked against a hash.
 # Each language has two jobs, so that no job that runs CodeQL, or code of this repository, of its tools or of its dependencies, holds a token that can write (X-004; AGENTS.md, workflow conventions). "CodeQL analysis (<language>)" analyses with read permissions only and keeps its results, one SARIF file, as a workflow artifact for a day. "CodeQL (<language>)", the check that main's ruleset requires, holds security-events: write and, after a first step that fails unless its analysis succeeded, runs only GitHub's own actions: it checks out the repository without credentials, downloads that file and uploads it to code scanning. It runs even when its analysis failed, so that the check fails instead of being skipped, which GitHub would count as passed. The upload jobs keep the ids of the jobs that analysed and uploaded before X-004 (analyze for the matrix), because code scanning tells its configurations apart by the workflow, the job id, the matrix and the category: with new ids, it would see new configurations, and the old ones would stay behind on main with their alerts.
 # CodeQL's engine, the CodeQL bundle, is downloaded by this workflow and checked against the SHA-256 that its release publishes, then handed to the CodeQL action, which would otherwise download it without checking a hash. Keep CODEQL_VERSION equal to the bundle that the pinned github/codeql-action names in its src/defaults.json (version 4.38.3 names 2.27.2), and update both together in the monthly dependency session, in all five BayanDocs repositories.
 # Workflow conventions (AGENTS.md): GitHub's own actions only, pinned to full commit SHAs with the version in a comment; per-job permissions; no credentials kept after checkout; timeouts; the pull_request and merge_group triggers (never pull_request_target).
@@ -140,6 +140,9 @@ jobs:
   cpp-analysis:
     name: CodeQL analysis (c-cpp)
     runs-on: ubuntu-24.04
+    # A container from the base image of deps/ubuntu-packages.lock (tests/ubuntu-packages/test_lock.py keeps them equal), as in ci.yml's Linux jobs.
+    container:
+      image: docker.io/library/buildpack-deps:noble-scm@sha256:94ed690dd634b8b2f531eaa742fde9b1264077cd8ea695a3b960bd104ae4c481 # created 2026-10-26T23:50:00Z
     timeout-minutes: 45
     permissions:
       contents: read # check out the repository
@@ -147,10 +150,6 @@ jobs:
     defaults:
       run:
         shell: bash
-    env:
-      # Ubuntu packages Qt needs to build, from the Ubuntu archive frozen at a date: the same as in ci.yml (tests/workflows/test_ubuntu_packages.py keeps them equal).
-      UBUNTU_SNAPSHOT: 20261027T000000Z
-      UBUNTU_PACKAGES: libgl-dev libegl-dev libvulkan-dev libxkbcommon-dev libfontconfig-dev libdbus-1-dev
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -159,11 +158,29 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install Ubuntu packages
-        run: |
-          sudo apt-get update --snapshot "$UBUNTU_SNAPSHOT"
-          # shellcheck disable=SC2086 # the package list is meant to be split into words
-          sudo apt-get install -y --no-install-recommends --snapshot "$UBUNTU_SNAPSHOT" $UBUNTU_PACKAGES
+      - name: Let git use the checkout, which belongs to the runner's user and not to the container's root
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # As in ci.yml: the same lock, cache key and folder, so the jobs share the cache.
+      - name: Restore the Ubuntu package files from the cache
+        id: ubuntu-packages-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ubuntu-packages
+          key: ubuntu-packages-v1-${{ hashFiles('deps/ubuntu-packages.lock') }}
+
+      - name: Fetch the Ubuntu package files that deps/ubuntu-packages.lock lists, each checked against its size and SHA-256
+        run: sh scripts/ubuntu-packages.sh fetch --report "$RUNNER_TEMP/ubuntu-packages.report" deps/ubuntu-packages.lock "$RUNNER_TEMP/ubuntu-packages"
+
+      - name: Save them in the cache (runs on main only), before any package is installed
+        if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule') && steps.ubuntu-packages-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ubuntu-packages
+          key: ubuntu-packages-v1-${{ hashFiles('deps/ubuntu-packages.lock') }}
+
+      - name: Install the Ubuntu packages with dpkg, in apt's recorded order, without apt and without network
+        run: sh scripts/ubuntu-packages.sh install --report "$RUNNER_TEMP/ubuntu-packages.report" deps/ubuntu-packages.lock "$RUNNER_TEMP/ubuntu-packages"
 
       - name: The pinned Qt release is at least 24 hours old (ADR-0017 rule 4), checked before Qt is installed and its tools run in the build
         run: python3 scripts/check-qt-release-age.py

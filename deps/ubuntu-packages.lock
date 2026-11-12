@@ -1,0 +1,288 @@
+# Ubuntu packages for Linux CI jobs: exact files on a base image pinned by digest, installed by scripts/ubuntu-packages.sh (BayanDocs X-005).
+# Written by that script's lock command, which ran apt in the image below against Ubuntu's archive as it was at the snapshot date and
+# checked its index against Ubuntu's signature; do not edit by hand. To write it again, for example with a newer image or date:
+#   sh scripts/ubuntu-packages.sh lock --from <this file> --cutoff <session start minus 24 h> [--image <image>] [--snapshot <date>] --output <this file>
+# The plan is apt's, in its order: unpack <package> <version> <architecture> <pool path> <size> <SHA-256>, and configure <package> <version>.
+format 1
+image docker.io/library/buildpack-deps:noble-scm@sha256:94ed690dd634b8b2f531eaa742fde9b1264077cd8ea695a3b960bd104ae4c481
+created 2026-10-26T23:50:00.169696607Z
+architecture amd64
+snapshot 20261111T000000Z
+request g++
+request libdbus-1-dev
+request libegl-dev
+request libfontconfig-dev
+request libgl-dev
+request libglib2.0-0t64
+request libvulkan-dev
+request libxkbcommon-dev
+request python3-venv
+request rustup
+request xz-utils
+request zstd
+unpack libperl5.38t64 5.38.2-3.2ubuntu0.7 amd64 pool/main/p/perl/libperl5.38t64_5.38.2-3.2ubuntu0.7_amd64.deb 4863750 134f2d9341d97b8a3582df4d646f8da19d505aa75eb42e67cefb7570c42be7cc
+unpack perl 5.38.2-3.2ubuntu0.7 amd64 pool/main/p/perl/perl_5.38.2-3.2ubuntu0.7_amd64.deb 231404 5e95eaa0db06b3eb4c669c033a6a9347f47c2923c8fd1297c7d9c553c4f8d153
+unpack perl-base 5.38.2-3.2ubuntu0.7 amd64 pool/main/p/perl/perl-base_5.38.2-3.2ubuntu0.7_amd64.deb 1827882 38045b6be63d521ab389b2fe619f0d22ad0582191605e6108a4c51b452090265
+configure perl-base 5.38.2-3.2ubuntu0.7
+unpack perl-modules-5.38 5.38.2-3.2ubuntu0.7 all pool/main/p/perl/perl-modules-5.38_5.38.2-3.2ubuntu0.7_all.deb 3109958 8d2652aa897458aa2482be38d1d0fb26745e87450ab5b620b33180ab0078190c
+unpack libapt-pkg6.0t64 2.8.4ubuntu0.1 amd64 pool/main/a/apt/libapt-pkg6.0t64_2.8.4ubuntu0.1_amd64.deb 985236 a50f3e68a793f90b05f44a4b5f2f59f3ec7687e39b5d8bbd1da44c84671fa3d6
+configure libapt-pkg6.0t64 2.8.4ubuntu0.1
+unpack apt 2.8.4ubuntu0.1 amd64 pool/main/a/apt/apt_2.8.4ubuntu0.1_amd64.deb 1396574 ad2ea7f107f250ba88b0bfdba31812a341e3247589647aa2b03b9dc4e8abf8ed
+configure apt 2.8.4ubuntu0.1
+unpack sgml-base 1.31 all pool/main/s/sgml-base/sgml-base_1.31_all.deb 11446 b112268e2feca483398805e92e29e31b07592ddbc4bb021bd5f8f64f8042ca86
+unpack libpcre2-8-0 10.42-4ubuntu2.2 amd64 pool/main/p/pcre2/libpcre2-8-0_10.42-4ubuntu2.2_amd64.deb 228546 f41da7cb7e979d6b037ea92650c72ec8ec532ec3c93aa8d5b997207de56695ea
+configure libpcre2-8-0 10.42-4ubuntu2.2
+unpack ca-certificates 20260816ubuntu0.24.04.2 all pool/main/c/ca-certificates/ca-certificates_20260816ubuntu0.24.04.2_all.deb 140064 f9fbacd417b515450b831032cc39d18059e9874e67525679a43c16071dabf9a0
+unpack libdbus-1-3 1.14.10-4ubuntu4.1 amd64 pool/main/d/dbus/libdbus-1-3_1.14.10-4ubuntu4.1_amd64.deb 209734 5d630480f04b4b442300ce847a3fa705ea4d14d80ba6de91f99b51a4e4953b08
+unpack libelf1t64 0.190-1.1ubuntu0.1 amd64 pool/main/e/elfutils/libelf1t64_0.190-1.1ubuntu0.1_amd64.deb 57810 b4aee123a37472d213647594b4f7d4a0d13615b0ca2a6fd33926b768d6b232c2
+unpack libglib2.0-0t64 2.80.0-6ubuntu3.10 amd64 pool/main/g/glib2.0/libglib2.0-0t64_2.80.0-6ubuntu3.10_amd64.deb 1547558 ff1b650f655b36dfe202fdbae6bb02b363c7257b6dd23e4f95ab61f716190df3
+unpack libicu74 74.2-1ubuntu3.1 amd64 pool/main/i/icu/libicu74_74.2-1ubuntu3.1_amd64.deb 10860078 c9a70989678660eed9a1e904c74fa043da8bec8e2036856fc16e31ced79b04f8
+unpack libsqlite3-0 3.45.1-1ubuntu2.9 amd64 pool/main/s/sqlite3/libsqlite3-0_3.45.1-1ubuntu2.9_amd64.deb 701804 e04c9d3cf7d0fc4d63332bea2395280550a0b5daef35d19c3c079fc2e96a92e5
+unpack libxml2 2.9.14+dfsg-1.3ubuntu3.10 amd64 pool/main/libx/libxml2/libxml2_2.9.14+dfsg-1.3ubuntu3.10_amd64.deb 763592 c5a065f85c1e6f605741e365e40cad71c3ceb0e85e2791400bd35b8896e12ad1
+unpack xkb-data 2.41-2ubuntu1.1 all pool/main/x/xkeyboard-config/xkb-data_2.41-2ubuntu1.1_all.deb 397328 e99f2a0b4c56cdf35dec489e56b6a8418826cab8ce6306ec6d0bd98e2cd0014a
+unpack libdrm-common 2.4.125-1ubuntu0.1~24.04.2 all pool/main/libd/libdrm/libdrm-common_2.4.125-1ubuntu0.1~24.04.2_all.deb 9250 0b60996bc18fa1545e60a47bb0fe1a7f360ec06fe62ba35fb8d8ba2a54e62166
+unpack libdrm2 2.4.125-1ubuntu0.1~24.04.2 amd64 pool/main/libd/libdrm/libdrm2_2.4.125-1ubuntu0.1~24.04.2_amd64.deb 41388 4d3e858dd57be617c49d87c5ddcdb35df744a4f0a559981256ae2ba174718584
+unpack libjansson4 2.14-2build2 amd64 pool/main/j/jansson/libjansson4_2.14-2build2_amd64.deb 32830 0cf79113f5d193ce9af2be2ff4b2c3b30dd4e55a0b6c47f7d28f6c849ff3aa60
+unpack libpng16-16t64 1.6.43-5ubuntu0.7 amd64 pool/main/libp/libpng1.6/libpng16-16t64_1.6.43-5ubuntu0.7_amd64.deb 188998 863d6abb089b2820ceba98e6b18f06eaacc55f9b05827001e7b4021a9a7b246c
+unpack libsensors-config 1:3.6.0-9build1 all pool/main/l/lm-sensors/libsensors-config_3.6.0-9build1_all.deb 5546 148103a436fd273dabfe0fe41dc54873df46227b59b2c7ac7339d7e2ddfd033b
+unpack libsensors5 1:3.6.0-9build1 amd64 pool/main/l/lm-sensors/libsensors5_3.6.0-9build1_amd64.deb 26600 515ed1fbe2bc99926c44fe10b1beb9c3510068c344adda334303098d669ba1e5
+unpack libxau6 1:1.0.9-1build6 amd64 pool/main/libx/libxau/libxau6_1.0.9-1build6_amd64.deb 7160 e40d29f1d1a62393bacaedebe0da3d9006084152a9f7e5e029293f08ce1c5c80
+unpack libxdmcp6 1:1.1.3-0ubuntu6 amd64 pool/main/libx/libxdmcp/libxdmcp6_1.1.3-0ubuntu6_amd64.deb 10254 bcd336fce11ce2a45f34d0f95e6980af22529f22147e8f98c156e5cee8ee42bb
+unpack libxcb1 1.15-1ubuntu2 amd64 pool/main/libx/libxcb/libxcb1_1.15-1ubuntu2_amd64.deb 47730 e1c6611d11ad7398326f1bf028afc34c3b14c51d917a3426b966ed4b9687fa58
+unpack libx11-data 2:1.8.7-1ubuntu0.1 all pool/main/libx/libx11/libx11-data_1.8.7-1ubuntu0.1_all.deb 115970 5cb70f7a8e7178e0bae4fd49eee49feaed623d2d821caf6ea5862b66f9e9630b
+unpack libx11-6 2:1.8.7-1ubuntu0.1 amd64 pool/main/libx/libx11/libx11-6_1.8.7-1ubuntu0.1_amd64.deb 653072 9102f73477081a9a57994c80587ca9760341f644ed51bdfa46f2248083d418b3
+unpack libxext6 2:1.3.4-1build2 amd64 pool/main/libx/libxext/libxext6_1.3.4-1build2_amd64.deb 30406 45783969a9ece9d7b7b733b8c60981584c53c6bc5ee3b42d295d2f80d1285679
+unpack libxkbcommon0 1.6.0-1build1 amd64 pool/main/libx/libxkbcommon/libxkbcommon0_1.6.0-1build1_amd64.deb 121944 2b9caeb423efb540296a1cb20b872cc630c23908407ecb5c1c787a617622d664
+unpack xz-utils 5.6.1+really5.4.5-1ubuntu0.4 amd64 pool/main/x/xz-utils/xz-utils_5.6.1+really5.4.5-1ubuntu0.4_amd64.deb 267426 18ef3c30308990626cfbda8b6336ef6ef5a412d1991bdad0cdaa226fd2041ffe
+unpack binutils-common 2.42-4ubuntu2.10 amd64 pool/main/b/binutils/binutils-common_2.42-4ubuntu2.10_amd64.deb 240286 d136073f5e2153f3df11c1d08d66727b9466b28ff483f50085f14bbe3464b5ee
+unpack libsframe1 2.42-4ubuntu2.10 amd64 pool/main/b/binutils/libsframe1_2.42-4ubuntu2.10_amd64.deb 15724 72093fb456864db55f1352bfa5e952a94f7abaff64e71dff1fbf001db1984564
+unpack libbinutils 2.42-4ubuntu2.10 amd64 pool/main/b/binutils/libbinutils_2.42-4ubuntu2.10_amd64.deb 576834 064dce00ce94e1fc2d33779cb0071088f4c8aac79e85345f2e78a020f7d14699
+unpack libctf-nobfd0 2.42-4ubuntu2.10 amd64 pool/main/b/binutils/libctf-nobfd0_2.42-4ubuntu2.10_amd64.deb 98012 da352eb7fa6c4369d2a6c1e5e680f574eda2e38576563326b18d9e47e61c4078
+unpack libctf0 2.42-4ubuntu2.10 amd64 pool/main/b/binutils/libctf0_2.42-4ubuntu2.10_amd64.deb 94474 7ec86d697c3668503c85f308a6832f092075b5880ad002f22185264da0bd4645
+unpack libgprofng0 2.42-4ubuntu2.10 amd64 pool/main/b/binutils/libgprofng0_2.42-4ubuntu2.10_amd64.deb 848684 1b7e3c2fc162e8358ca6e5a3fffdb4d0d632f790630323215841bb36a63c0ab8
+unpack binutils-x86-64-linux-gnu 2.42-4ubuntu2.10 amd64 pool/main/b/binutils/binutils-x86-64-linux-gnu_2.42-4ubuntu2.10_amd64.deb 2462744 1e510a15f30208d39edcd840e48f26a77bbca7c417805eeccb1e3f7de198ef29
+unpack binutils 2.42-4ubuntu2.10 amd64 pool/main/b/binutils/binutils_2.42-4ubuntu2.10_amd64.deb 18154 b3b5a84181a38fd191820b2cdcc1a3eeb1cd6333ad472f2092f96e81047e9c74
+unpack gcc-13-base 13.3.0-6ubuntu2~24.04.1 amd64 pool/main/g/gcc-13/gcc-13-base_13.3.0-6ubuntu2~24.04.1_amd64.deb 51616 e859aca26585bb91113a451f1e66bc0e5283cb08797d679aacc1d936ae6dff8e
+unpack libisl23 0.26-3build1.1 amd64 pool/main/i/isl/libisl23_0.26-3build1.1_amd64.deb 679812 4e040926e50fb961fae9bf95660189d468336a4a17bc321872c434fc8f777e7f
+unpack libmpfr6 4.2.1-1build1.1 amd64 pool/main/m/mpfr4/libmpfr6_4.2.1-1build1.1_amd64.deb 353020 aebc1c8b69a1f98bb43dfc268daecd181116dbf40b13ee4e822eb4bdd52b493a
+unpack libmpc3 1.3.1-1build1.1 amd64 pool/main/m/mpclib3/libmpc3_1.3.1-1build1.1_amd64.deb 54636 cebe6098bb3d66fdacac9dc6fe406a651216d9c00f27c3f9c159d15d96cdf864
+unpack cpp-13-x86-64-linux-gnu 13.3.0-6ubuntu2~24.04.1 amd64 pool/main/g/gcc-13/cpp-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb 10714542 2ca48bf0c2d6465bc39322899715a85d934b4d7442dd5586a7bebbe3ce0f806b
+unpack cpp-13 13.3.0-6ubuntu2~24.04.1 amd64 pool/main/g/gcc-13/cpp-13_13.3.0-6ubuntu2~24.04.1_amd64.deb 1042 c7535331fbb183c802c3bf4b6b210872dcc12d0421b3212b3c4b940f2c59ed3a
+unpack cpp-x86-64-linux-gnu 4:13.2.0-7ubuntu1 amd64 pool/main/g/gcc-defaults/cpp-x86-64-linux-gnu_13.2.0-7ubuntu1_amd64.deb 5326 85059b30960de3582e8612740614da3dfe47241d0368a28dea686188cf7648dd
+unpack cpp 4:13.2.0-7ubuntu1 amd64 pool/main/g/gcc-defaults/cpp_13.2.0-7ubuntu1_amd64.deb 22442 b51f8094760f7b41afdcb1fe1b5a57fc64b75a090859918af17450a10f8c7d31
+unpack fonts-dejavu-mono 2.37-8 all pool/main/f/fonts-dejavu/fonts-dejavu-mono_2.37-8_all.deb 502232 8a599d6553307db7ecb795d2f0e5a301e03234afc75c7358b0ba43466454c89a
+unpack fonts-dejavu-core 2.37-8 all pool/main/f/fonts-dejavu/fonts-dejavu-core_2.37-8_all.deb 835172 40049660c194f3b8a2541fc7369efebb10e9f94bdac836a2f38fafedd10fa73a
+unpack fontconfig-config 2.15.0-1.1ubuntu2 amd64 pool/main/f/fontconfig/fontconfig-config_2.15.0-1.1ubuntu2_amd64.deb 37298 9df0579cd298a1f2b7a40efd519c849745aecd193a09733cf4d1032284a62bbf
+unpack libcc1-0 14.2.0-4ubuntu2~24.04.1 amd64 pool/main/g/gcc-14/libcc1-0_14.2.0-4ubuntu2~24.04.1_amd64.deb 48002 454456436ca767817a860557263d7cc2489f0a410f03efff4c0bb236d579ec09
+unpack libgomp1 14.2.0-4ubuntu2~24.04.1 amd64 pool/main/g/gcc-14/libgomp1_14.2.0-4ubuntu2~24.04.1_amd64.deb 148062 e8a95ec58125b4933597f30ff56c2ae10edf90f287262e366d4b6edea3019144
+unpack libitm1 14.2.0-4ubuntu2~24.04.1 amd64 pool/main/g/gcc-14/libitm1_14.2.0-4ubuntu2~24.04.1_amd64.deb 29702 1fca498129dd3510294809d77ee754f72a9de281111200e9b7b9a5adf37faa9f
+unpack libatomic1 14.2.0-4ubuntu2~24.04.1 amd64 pool/main/g/gcc-14/libatomic1_14.2.0-4ubuntu2~24.04.1_amd64.deb 10466 fe49cbbc7be753528380c724a8eef5f1e31dffa9221f692c5069048d81c7449d
+unpack libasan8 14.2.0-4ubuntu2~24.04.1 amd64 pool/main/g/gcc-14/libasan8_14.2.0-4ubuntu2~24.04.1_amd64.deb 3026656 8321aac6230fa1da320e76eb6288b7436164624aec449ed3933ea6c4cc86daac
+unpack liblsan0 14.2.0-4ubuntu2~24.04.1 amd64 pool/main/g/gcc-14/liblsan0_14.2.0-4ubuntu2~24.04.1_amd64.deb 1321652 dc0c2a1a053e833ba4d71e1ec2ba4244fe301761ad4a91d6725f927a52d86a14
+unpack libtsan2 14.2.0-4ubuntu2~24.04.1 amd64 pool/main/g/gcc-14/libtsan2_14.2.0-4ubuntu2~24.04.1_amd64.deb 2771910 8cbcc9b3ae5ef23b449383d47a9035b27596e307d7dce7df9b83d47a7acd1d91
+unpack libubsan1 14.2.0-4ubuntu2~24.04.1 amd64 pool/main/g/gcc-14/libubsan1_14.2.0-4ubuntu2~24.04.1_amd64.deb 1183812 a16dea3abe2dcac99bcfae27e7e5672fde64573c3c170dcb0cd55631238f9814
+unpack libhwasan0 14.2.0-4ubuntu2~24.04.1 amd64 pool/main/g/gcc-14/libhwasan0_14.2.0-4ubuntu2~24.04.1_amd64.deb 1640706 2195318cfe68fe16b601913ef7b33c9a900372f57861643fdc9ae6fef84534cd
+unpack libquadmath0 14.2.0-4ubuntu2~24.04.1 amd64 pool/main/g/gcc-14/libquadmath0_14.2.0-4ubuntu2~24.04.1_amd64.deb 153316 dc8f0ca542e09d662f29370c8393c016440dd4bc5c996c5fcc19f632b63ce3b0
+unpack libgcc-13-dev 13.3.0-6ubuntu2~24.04.1 amd64 pool/main/g/gcc-13/libgcc-13-dev_13.3.0-6ubuntu2~24.04.1_amd64.deb 2680642 cd689db2691edaa10f37329307292796bb599e722e0505c79e14caaa1fe9a93a
+unpack gcc-13-x86-64-linux-gnu 13.3.0-6ubuntu2~24.04.1 amd64 pool/main/g/gcc-13/gcc-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb 21084546 a134b0319a82d14581b3a14820d2832af4ec9778ed8b9b4ddaeecfb0555ec325
+unpack gcc-13 13.3.0-6ubuntu2~24.04.1 amd64 pool/main/g/gcc-13/gcc-13_13.3.0-6ubuntu2~24.04.1_amd64.deb 494262 7438ff160b020a74970672189ecae25d0ca650de6d7f543f12a3134192cffbd9
+unpack gcc-x86-64-linux-gnu 4:13.2.0-7ubuntu1 amd64 pool/main/g/gcc-defaults/gcc-x86-64-linux-gnu_13.2.0-7ubuntu1_amd64.deb 1212 72e79089a10e381360bfc6f03c5e5d8c2ff177d6dbac2cd7ffb3cc1383f57591
+unpack gcc 4:13.2.0-7ubuntu1 amd64 pool/main/g/gcc-defaults/gcc_13.2.0-7ubuntu1_amd64.deb 5018 0e0bb8b25153ed1c44ab92bc219eed469fcb5820c5c0bc6454b2fd366a33d3ee
+unpack libc-dev-bin 2.39-0ubuntu8.9 amd64 pool/main/g/glibc/libc-dev-bin_2.39-0ubuntu8.9_amd64.deb 20402 77db23aba4582d034d9a95e4818a16e7e51a2d4fb17a9204439688e288d67f4c
+unpack linux-libc-dev 6.8.0-149.149 amd64 pool/main/l/linux/linux-libc-dev_6.8.0-149.149_amd64.deb 1698546 e4b7b9c5023ba727908868661e1113d28ed9b68e47aed00e314723dad4b2b31d
+unpack libcrypt-dev 1:4.4.36-4build1 amd64 pool/main/libx/libxcrypt/libcrypt-dev_4.4.36-4build1_amd64.deb 111780 2edff420ef80b4a3f3751e65c33423ef30e563122a58b759e4854ea8d84ba1b1
+unpack rpcsvc-proto 1.4.2-0ubuntu7 amd64 pool/main/r/rpcsvc-proto/rpcsvc-proto_1.4.2-0ubuntu7_amd64.deb 67446 7eb710fe148d224c159ddec1ceb0ba53ead52a80a6793dcdae1474acf20d8f71
+unpack libc6-dev 2.39-0ubuntu8.9 amd64 pool/main/g/glibc/libc6-dev_2.39-0ubuntu8.9_amd64.deb 2125612 e13d5fcc1b2a86f75bca8e0026a8e39f24fe97ca86e92be79991f8697eb1306f
+unpack libstdc++-13-dev 13.3.0-6ubuntu2~24.04.1 amd64 pool/main/g/gcc-13/libstdc++-13-dev_13.3.0-6ubuntu2~24.04.1_amd64.deb 2419834 ee5633e863e19c3381ed97842ce35ed32ede96a3d1ae4e94c051d3036fe21347
+unpack g++-13-x86-64-linux-gnu 13.3.0-6ubuntu2~24.04.1 amd64 pool/main/g/gcc-13/g++-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb 12161938 0bd6af6164252d4ea9170d201ee4c10a3120fe0fc04985a00be3bc9076353844
+unpack g++-13 13.3.0-6ubuntu2~24.04.1 amd64 pool/main/g/gcc-13/g++-13_13.3.0-6ubuntu2~24.04.1_amd64.deb 16048 0f3ef964b8a91a9cd7bebfd126839a21941c55547cadcf4aa00204bc8cc43985
+unpack g++-x86-64-linux-gnu 4:13.2.0-7ubuntu1 amd64 pool/main/g/gcc-defaults/g++-x86-64-linux-gnu_13.2.0-7ubuntu1_amd64.deb 964 145b027a542db5b21f85d4f9e242f51c62c69914fc484adb3a4881ca8e2f3913
+unpack g++ 4:13.2.0-7ubuntu1 amd64 pool/main/g/gcc-defaults/g++_13.2.0-7ubuntu1_amd64.deb 1100 800a84b369c64b18d65f0fb5c1533de0446c880ee4f1cadad64e3363327f63f0
+unpack libbrotli-dev 1.1.0-2ubuntu0.1 amd64 pool/main/b/brotli/libbrotli-dev_1.1.0-2ubuntu0.1_amd64.deb 353330 eeb4af4ba21b8203007e4440c9e770d5c8031c52d0cc75e3f78d6154b8abf170
+unpack libbz2-dev 1.0.8-5.1ubuntu0.1 amd64 pool/main/b/bzip2/libbz2-dev_1.0.8-5.1ubuntu0.1_amd64.deb 33608 f055bb5cb47117020a76dc40fcdb8164f4fa529df2b7f485faacc0b0f5083614
+unpack libpkgconf3 1.8.1-2build1 amd64 pool/main/p/pkgconf/libpkgconf3_1.8.1-2build1_amd64.deb 30652 fc3a57e8f931ec06cb7c51acc56878f1fec247ff02a7adcab26905c2faeb2792
+unpack pkgconf-bin 1.8.1-2build1 amd64 pool/main/p/pkgconf/pkgconf-bin_1.8.1-2build1_amd64.deb 20730 7a812f05ee1610154b433e2ad54f6e4163fcbb306b9fb31afe959afb2e5e1545
+unpack pkgconf 1.8.1-2build1 amd64 pool/main/p/pkgconf/pkgconf_1.8.1-2build1_amd64.deb 16790 834a58031069d97d7cfb8b2f5bfd5effc69cecf7f30cc362071875f1f8dc1828
+unpack xml-core 0.19 all pool/main/x/xml-core/xml-core_0.19_all.deb 20340 0775fdd720d5ed81250da73a1d825a863be7a997122ae11077c89db37d82cb6d
+unpack libdbus-1-dev 1.14.10-4ubuntu4.1 amd64 pool/main/d/dbus/libdbus-1-dev_1.14.10-4ubuntu4.1_amd64.deb 189808 ec30a44d0ae84b15ff5e50c3481b61d21d560626ce52326446135841e4cda1a5
+unpack libdrm-amdgpu1 2.4.125-1ubuntu0.1~24.04.2 amd64 pool/main/libd/libdrm/libdrm-amdgpu1_2.4.125-1ubuntu0.1~24.04.2_amd64.deb 21374 aa29b7898bae596bf07e55ba178cf8d5ea698fe83688e1b34520d86010251a7a
+unpack libpciaccess0 0.17-3ubuntu0.24.04.3 amd64 pool/main/libp/libpciaccess/libpciaccess0_0.17-3ubuntu0.24.04.3_amd64.deb 19220 87a3b1c2a09f54d229e5e1f5424adc806e8f99bbb8aa8c8dea114b727f7a5a96
+unpack libdrm-intel1 2.4.125-1ubuntu0.1~24.04.2 amd64 pool/main/libd/libdrm/libdrm-intel1_2.4.125-1ubuntu0.1~24.04.2_amd64.deb 63868 847195765b9ef7e7886677aeae9987aa54e496758b4e6e5a4ed2cb580b252244
+unpack libglvnd0 1.7.0-1build1 amd64 pool/main/libg/libglvnd/libglvnd0_1.7.0-1build1_amd64.deb 69594 33f5e07c74f73c2bfb44086ae0f9e6da52acd6c104d30ffe8fd768d8253d5e82
+unpack libllvm20 1:20.1.2-0ubuntu1~24.04.3 amd64 pool/main/l/llvm-toolchain-20/libllvm20_20.1.2-0ubuntu1~24.04.3_amd64.deb 30574382 f018e71c72c7a4742fb1aff9dc98b45586f42e6ea464d4918af7e3772b7f0658
+unpack libx11-xcb1 2:1.8.7-1ubuntu0.1 amd64 pool/main/libx/libx11/libx11-xcb1_1.8.7-1ubuntu0.1_amd64.deb 7796 5ce7093e58aaaf753ed0904351a4e07f209e0c282ee8ef4f5f7988d0b40dccc1
+unpack libxcb-dri3-0 1.15-1ubuntu2 amd64 pool/main/libx/libxcb/libxcb-dri3-0_1.15-1ubuntu2_amd64.deb 7142 3d3d0e95e56ae16010a84883196b8153cba62d6831f9aaee2a68c46f20c7c004
+unpack libxcb-present0 1.15-1ubuntu2 amd64 pool/main/libx/libxcb/libxcb-present0_1.15-1ubuntu2_amd64.deb 5676 2e36e6557e87dbfd64df3143cbf81a4f75c3447501a545b4730511d228b0dd17
+unpack libxcb-randr0 1.15-1ubuntu2 amd64 pool/main/libx/libxcb/libxcb-randr0_1.15-1ubuntu2_amd64.deb 17862 b5cb519823a05a617b543dc9b6a9289b7648b20048244abe021caa706309835a
+unpack libxcb-sync1 1.15-1ubuntu2 amd64 pool/main/libx/libxcb/libxcb-sync1_1.15-1ubuntu2_amd64.deb 9312 14286795a258593259923619073e50c15345673befae2733f7b0577b07359aa8
+unpack libxcb-xfixes0 1.15-1ubuntu2 amd64 pool/main/libx/libxcb/libxcb-xfixes0_1.15-1ubuntu2_amd64.deb 10190 0b2ab64af92a71e3d1a35e3c819880ee28d04bfac81360df68ae8d8e9663ebd2
+unpack libxshmfence1 1.3-1build5 amd64 pool/main/libx/libxshmfence/libxshmfence1_1.3-1build5_amd64.deb 4764 bc6de4bfaf9050a8ba83d4bcfb114131b081084a7972c03417f8523d52b5c742
+unpack mesa-libgallium 25.2.8-0ubuntu0.24.04.4 amd64 pool/main/m/mesa/mesa-libgallium_25.2.8-0ubuntu0.24.04.4_amd64.deb 10783312 0c50c3c18c1b3f3ac4243bbf1533c9202f9d7b4f646807e9ef0df4c801414256
+unpack libgbm1 25.2.8-0ubuntu0.24.04.4 amd64 pool/main/m/mesa/libgbm1_25.2.8-0ubuntu0.24.04.4_amd64.deb 34172 4bfe348b456db5b445a80e0a3ffb9e9a01b91499bb86e0e568ca3634b134da7e
+unpack libwayland-client0 1.22.0-2.1build1 amd64 pool/main/w/wayland/libwayland-client0_1.22.0-2.1build1_amd64.deb 26406 6af0aed41d75149bea22fa468f01eb058ffe3e35ef07ff2f13fb88a90387881d
+unpack libxcb-shm0 1.15-1ubuntu2 amd64 pool/main/libx/libxcb/libxcb-shm0_1.15-1ubuntu2_amd64.deb 5756 229d1280d459f1ba44c22939d3f9b61d9d20932d9a646b3fe4ce50be4cdf2325
+unpack libegl-mesa0 25.2.8-0ubuntu0.24.04.4 amd64 pool/main/m/mesa/libegl-mesa0_25.2.8-0ubuntu0.24.04.4_amd64.deb 117224 2b8363cb29868603c827cb569a19373a45bebb29bdca5cd34de42dce2f3c9419
+unpack libegl1 1.7.0-1build1 amd64 pool/main/libg/libglvnd/libegl1_1.7.0-1build1_amd64.deb 28670 e549f7776216f7bd3b1c216729fb40a97a562e2eb7c563cde632b4931f9a4e57
+unpack libxcb-glx0 1.15-1ubuntu2 amd64 pool/main/libx/libxcb/libxcb-glx0_1.15-1ubuntu2_amd64.deb 24774 d07cde26c70fe92df7c327928371e495cc4570fed2d6518758a5db5715cb34c1
+unpack libxxf86vm1 1:1.1.4-1build4 amd64 pool/main/libx/libxxf86vm/libxxf86vm1_1.1.4-1build4_amd64.deb 9282 48b2799f52b86505d2bc91dcb1bfa6536545635b9849cb693d274d934116a8da
+unpack libvulkan1 1.3.275.0-1build1 amd64 pool/main/v/vulkan-loader/libvulkan1_1.3.275.0-1build1_amd64.deb 142010 ccf4fe8f4461442f27ea2494c7ae650b60bd396fec2688b0c44a27d66a222f74
+unpack libgl1-mesa-dri 25.2.8-0ubuntu0.24.04.4 amd64 pool/main/m/mesa/libgl1-mesa-dri_25.2.8-0ubuntu0.24.04.4_amd64.deb 37950 2dabbe4292b201ca07b38c0672352f68dbfc55b5850f96f89ef54d3b4b6c8a59
+unpack libglx-mesa0 25.2.8-0ubuntu0.24.04.4 amd64 pool/main/m/mesa/libglx-mesa0_25.2.8-0ubuntu0.24.04.4_amd64.deb 110128 5aa6164059989d476b15caa8ade892b1dec37593934dc4f617ece7ea0d639bc0
+unpack libglx0 1.7.0-1build1 amd64 pool/main/libg/libglvnd/libglx0_1.7.0-1build1_amd64.deb 38558 aa4953182f30abde90cb5b072e83d7286b557b325769b8686196a7bd396d8795
+unpack libgl1 1.7.0-1build1 amd64 pool/main/libg/libglvnd/libgl1_1.7.0-1build1_amd64.deb 101990 e2b2fadeb883f073b566ad1d7874f6702397514d258473e96152a89d4d502a09
+unpack xorg-sgml-doctools 1:1.11-1.1 all pool/main/x/xorg-sgml-doctools/xorg-sgml-doctools_1.11-1.1_all.deb 10936 277f662c6d94606c22078f2af82ac1b6e01386d5a4dec6ca7487bca4c5b23c07
+unpack x11proto-dev 2023.2-1 all pool/main/x/xorgproto/x11proto-dev_2023.2-1_all.deb 602398 3bf13a2ffb79ecd4014d438936014e5863f79eb59ebf76e8f43356271c90e7ce
+unpack libxau-dev 1:1.0.9-1build6 amd64 pool/main/libx/libxau/libxau-dev_1.0.9-1build6_amd64.deb 9570 46783c6af2d87c06394d55dfaa21dac07396f13cfc5ea6afbd9313ab49fc0e50
+unpack libxdmcp-dev 1:1.1.3-0ubuntu6 amd64 pool/main/libx/libxdmcp/libxdmcp-dev_1.1.3-0ubuntu6_amd64.deb 26546 ba2f2230b391c292f5f399d6e04d48181be6b3100556f7870591ca95c9d00667
+unpack xtrans-dev 1.4.0-1 all pool/main/x/xtrans/xtrans-dev_1.4.0-1_all.deb 68900 45277c51d5d83db351b61859314b59595c9626ac372fbb2fc0d5542e169d9086
+unpack libpthread-stubs0-dev 0.4-1build3 amd64 pool/main/libp/libpthread-stubs/libpthread-stubs0-dev_0.4-1build3_amd64.deb 4746 b8f278da7b1907d3014c01f9bc89748208a8cd3b770f0f55f1528afcc98dc6c0
+unpack libxcb1-dev 1.15-1ubuntu2 amd64 pool/main/libx/libxcb/libxcb1-dev_1.15-1ubuntu2_amd64.deb 85790 1bafe3432feafc9e57f858721da524dfb3ee1f6fc4ef6b0c73023e79eadb9c28
+unpack libx11-dev 2:1.8.7-1ubuntu0.1 amd64 pool/main/libx/libx11/libx11-dev_1.8.7-1ubuntu0.1_amd64.deb 732278 467e28dafc2a51a59bf8615325e2e6bd42da63d3e346580a5baf14fdfde8a8e1
+unpack libglx-dev 1.7.0-1build1 amd64 pool/main/libg/libglvnd/libglx-dev_1.7.0-1build1_amd64.deb 14176 0e2654950a881c20b640a3af590add2e0b612b8c0fdd945761fc695e1b6eb797
+unpack libgl-dev 1.7.0-1build1 amd64 pool/main/libg/libglvnd/libgl-dev_1.7.0-1build1_amd64.deb 102444 b7145fd8f8abe20d5cb436d2eae9b3235bd91be6fbddac581620d16763bd9250
+unpack libegl-dev 1.7.0-1build1 amd64 pool/main/libg/libglvnd/libegl-dev_1.7.0-1build1_amd64.deb 18204 3a0315216bb0d6fc4bbe7f689cf0168c2ffa3e62ac69bff06bbbe49679259990
+unpack libexpat1-dev 2.6.1-2ubuntu0.6 amd64 pool/main/e/expat/libexpat1-dev_2.6.1-2ubuntu0.6_amd64.deb 146542 87281ce46d74f261caff4ac404fe5af7b07f185d305246fef81797ddc20fa9f8
+unpack libfreetype6 2.13.2+dfsg-1ubuntu0.2 amd64 pool/main/f/freetype/libfreetype6_2.13.2+dfsg-1ubuntu0.2_amd64.deb 402610 8c6d3bac5a6197fa2f48b2d56f04f3ffecaa7082eeab91b0939f97a40adc88a6
+unpack libfontconfig1 2.15.0-1.1ubuntu2 amd64 pool/main/f/fontconfig/libfontconfig1_2.15.0-1.1ubuntu2_amd64.deb 138572 a2bc05cfef021fdb84285036f98eda5ebec3c4b7a378f5aa2bdba5c4d3d8d586
+unpack zlib1g-dev 1:1.3.dfsg-3.1ubuntu2.3 amd64 pool/main/z/zlib/zlib1g-dev_1.3.dfsg-3.1ubuntu2.3_amd64.deb 894134 419902a649e1078f24596cdf31ced9c839519828790f59888056fcdcd58e8a28
+unpack libpng-dev 1.6.43-5ubuntu0.7 amd64 pool/main/libp/libpng1.6/libpng-dev_1.6.43-5ubuntu0.7_amd64.deb 264970 db0d4bc0054ae0061524d009f75bd4409b10f596274f3a9aa07d5e3212812263
+unpack libfreetype-dev 2.13.2+dfsg-1ubuntu0.2 amd64 pool/main/f/freetype/libfreetype-dev_2.13.2+dfsg-1ubuntu0.2_amd64.deb 574070 dd512109d33b182387be40cfe2b68b912b14f0753ba2a0769ca1950de0713a28
+unpack uuid-dev 2.39.3-9ubuntu6.6 amd64 pool/main/u/util-linux/uuid-dev_2.39.3-9ubuntu6.6_amd64.deb 33546 266115cc3bcecef70b9f75c0cf8ca4daccd40958bf7872f8ccebec50502d2a13
+unpack libfontconfig-dev 2.15.0-1.1ubuntu2 amd64 pool/main/f/fontconfig/libfontconfig-dev_2.15.0-1.1ubuntu2_amd64.deb 161130 7948f3037b39d8bc751dc6104ff490c2d2f1b145d2969227ba591ceb917f9f05
+unpack libvulkan-dev 1.3.275.0-1build1 amd64 pool/main/v/vulkan-loader/libvulkan-dev_1.3.275.0-1build1_amd64.deb 1238904 9577a2c5379372ca8231e700728390fa7d4991a0d8c6484ad83da849c728e76e
+unpack libxkbcommon-dev 1.6.0-1build1 amd64 pool/main/libx/libxkbcommon/libxkbcommon-dev_1.6.0-1build1_amd64.deb 56264 e0b2b61efbadc516303d3bf27ee7b397cfbff120a178f938dd6570d5b53bc359
+unpack python3-pip-whl 24.0+dfsg-1ubuntu1.3 all pool/universe/p/python-pip/python3-pip-whl_24.0+dfsg-1ubuntu1.3_all.deb 1706638 4b7c50db8f261b208c1d9cde8db148c1f682cc516957b986ada5088cfcee1359
+unpack python3-setuptools-whl 68.1.2-2ubuntu1.2 all pool/universe/s/setuptools/python3-setuptools-whl_68.1.2-2ubuntu1.2_all.deb 716284 edfa94cc1f6a33af99cfaf6ebfe35dbcd9c4bdd8555b90c0d8e78479faf5c8f0
+unpack python3.12-venv 3.12.3-1ubuntu0.17 amd64 pool/universe/p/python3.12/python3.12-venv_3.12.3-1ubuntu0.17_amd64.deb 5684 b8d4bfea3df63945b6a202bd0773caf7727dde86d2df91df6e88a8ccf7c18b7e
+unpack python3-venv 3.12.3-0ubuntu2.1 amd64 pool/universe/p/python3-defaults/python3-venv_3.12.3-0ubuntu2.1_amd64.deb 1032 16d50387b7656796b79e2c059d06774dfe9fe3f42808d8d50b332ceb780f508a
+unpack rustup 1.26.0-5ubuntu0.1 amd64 pool/universe/r/rustup/rustup_1.26.0-5ubuntu0.1_amd64.deb 2335980 3b17fa4ef92924156a01ba2cbfcbab4029ecb57c062da61da6a5a3f7541ef4e1
+unpack zstd 1.5.5+dfsg2-2build1.1 amd64 pool/main/libz/libzstd/zstd_1.5.5+dfsg2-2build1.1_amd64.deb 644020 d7667f83e3a2caeaaecaca464d542ee6ccf537259a479622796c84afc96d6032
+configure libperl5.38t64 5.38.2-3.2ubuntu0.7
+configure perl 5.38.2-3.2ubuntu0.7
+configure perl-modules-5.38 5.38.2-3.2ubuntu0.7
+configure sgml-base 1.31
+configure ca-certificates 20260816ubuntu0.24.04.2
+configure libdbus-1-3 1.14.10-4ubuntu4.1
+configure libelf1t64 0.190-1.1ubuntu0.1
+configure libglib2.0-0t64 2.80.0-6ubuntu3.10
+configure libicu74 74.2-1ubuntu3.1
+configure libsqlite3-0 3.45.1-1ubuntu2.9
+configure libxml2 2.9.14+dfsg-1.3ubuntu3.10
+configure xkb-data 2.41-2ubuntu1.1
+configure libdrm-common 2.4.125-1ubuntu0.1~24.04.2
+configure libdrm2 2.4.125-1ubuntu0.1~24.04.2
+configure libjansson4 2.14-2build2
+configure libpng16-16t64 1.6.43-5ubuntu0.7
+configure libsensors-config 1:3.6.0-9build1
+configure libsensors5 1:3.6.0-9build1
+configure libxau6 1:1.0.9-1build6
+configure libxdmcp6 1:1.1.3-0ubuntu6
+configure libxcb1 1.15-1ubuntu2
+configure libx11-data 2:1.8.7-1ubuntu0.1
+configure libx11-6 2:1.8.7-1ubuntu0.1
+configure libxext6 2:1.3.4-1build2
+configure libxkbcommon0 1.6.0-1build1
+configure xz-utils 5.6.1+really5.4.5-1ubuntu0.4
+configure binutils-common 2.42-4ubuntu2.10
+configure libsframe1 2.42-4ubuntu2.10
+configure libbinutils 2.42-4ubuntu2.10
+configure libctf-nobfd0 2.42-4ubuntu2.10
+configure libctf0 2.42-4ubuntu2.10
+configure libgprofng0 2.42-4ubuntu2.10
+configure binutils-x86-64-linux-gnu 2.42-4ubuntu2.10
+configure binutils 2.42-4ubuntu2.10
+configure gcc-13-base 13.3.0-6ubuntu2~24.04.1
+configure libisl23 0.26-3build1.1
+configure libmpfr6 4.2.1-1build1.1
+configure libmpc3 1.3.1-1build1.1
+configure cpp-13-x86-64-linux-gnu 13.3.0-6ubuntu2~24.04.1
+configure cpp-13 13.3.0-6ubuntu2~24.04.1
+configure cpp-x86-64-linux-gnu 4:13.2.0-7ubuntu1
+configure cpp 4:13.2.0-7ubuntu1
+configure fonts-dejavu-mono 2.37-8
+configure fonts-dejavu-core 2.37-8
+configure fontconfig-config 2.15.0-1.1ubuntu2
+configure libcc1-0 14.2.0-4ubuntu2~24.04.1
+configure libgomp1 14.2.0-4ubuntu2~24.04.1
+configure libitm1 14.2.0-4ubuntu2~24.04.1
+configure libatomic1 14.2.0-4ubuntu2~24.04.1
+configure libasan8 14.2.0-4ubuntu2~24.04.1
+configure liblsan0 14.2.0-4ubuntu2~24.04.1
+configure libtsan2 14.2.0-4ubuntu2~24.04.1
+configure libubsan1 14.2.0-4ubuntu2~24.04.1
+configure libhwasan0 14.2.0-4ubuntu2~24.04.1
+configure libquadmath0 14.2.0-4ubuntu2~24.04.1
+configure libgcc-13-dev 13.3.0-6ubuntu2~24.04.1
+configure gcc-13-x86-64-linux-gnu 13.3.0-6ubuntu2~24.04.1
+configure gcc-13 13.3.0-6ubuntu2~24.04.1
+configure gcc-x86-64-linux-gnu 4:13.2.0-7ubuntu1
+configure gcc 4:13.2.0-7ubuntu1
+configure libc-dev-bin 2.39-0ubuntu8.9
+configure linux-libc-dev 6.8.0-149.149
+configure libcrypt-dev 1:4.4.36-4build1
+configure rpcsvc-proto 1.4.2-0ubuntu7
+configure libc6-dev 2.39-0ubuntu8.9
+configure libstdc++-13-dev 13.3.0-6ubuntu2~24.04.1
+configure g++-13-x86-64-linux-gnu 13.3.0-6ubuntu2~24.04.1
+configure g++-13 13.3.0-6ubuntu2~24.04.1
+configure g++-x86-64-linux-gnu 4:13.2.0-7ubuntu1
+configure g++ 4:13.2.0-7ubuntu1
+configure libbrotli-dev 1.1.0-2ubuntu0.1
+configure libbz2-dev 1.0.8-5.1ubuntu0.1
+configure libpkgconf3 1.8.1-2build1
+configure pkgconf-bin 1.8.1-2build1
+configure pkgconf 1.8.1-2build1
+configure xml-core 0.19
+configure libdbus-1-dev 1.14.10-4ubuntu4.1
+configure libdrm-amdgpu1 2.4.125-1ubuntu0.1~24.04.2
+configure libpciaccess0 0.17-3ubuntu0.24.04.3
+configure libdrm-intel1 2.4.125-1ubuntu0.1~24.04.2
+configure libglvnd0 1.7.0-1build1
+configure libllvm20 1:20.1.2-0ubuntu1~24.04.3
+configure libx11-xcb1 2:1.8.7-1ubuntu0.1
+configure libxcb-dri3-0 1.15-1ubuntu2
+configure libxcb-present0 1.15-1ubuntu2
+configure libxcb-randr0 1.15-1ubuntu2
+configure libxcb-sync1 1.15-1ubuntu2
+configure libxcb-xfixes0 1.15-1ubuntu2
+configure libxshmfence1 1.3-1build5
+configure mesa-libgallium 25.2.8-0ubuntu0.24.04.4
+configure libgbm1 25.2.8-0ubuntu0.24.04.4
+configure libwayland-client0 1.22.0-2.1build1
+configure libxcb-shm0 1.15-1ubuntu2
+configure libegl-mesa0 25.2.8-0ubuntu0.24.04.4
+configure libegl1 1.7.0-1build1
+configure libxcb-glx0 1.15-1ubuntu2
+configure libxxf86vm1 1:1.1.4-1build4
+configure libvulkan1 1.3.275.0-1build1
+configure libgl1-mesa-dri 25.2.8-0ubuntu0.24.04.4
+configure libglx-mesa0 25.2.8-0ubuntu0.24.04.4
+configure libglx0 1.7.0-1build1
+configure libgl1 1.7.0-1build1
+configure xorg-sgml-doctools 1:1.11-1.1
+configure x11proto-dev 2023.2-1
+configure libxau-dev 1:1.0.9-1build6
+configure libxdmcp-dev 1:1.1.3-0ubuntu6
+configure xtrans-dev 1.4.0-1
+configure libpthread-stubs0-dev 0.4-1build3
+configure libxcb1-dev 1.15-1ubuntu2
+configure libx11-dev 2:1.8.7-1ubuntu0.1
+configure libglx-dev 1.7.0-1build1
+configure libgl-dev 1.7.0-1build1
+configure libegl-dev 1.7.0-1build1
+configure libexpat1-dev 2.6.1-2ubuntu0.6
+configure libfreetype6 2.13.2+dfsg-1ubuntu0.2
+configure libfontconfig1 2.15.0-1.1ubuntu2
+configure zlib1g-dev 1:1.3.dfsg-3.1ubuntu2.3
+configure libpng-dev 1.6.43-5ubuntu0.7
+configure libfreetype-dev 2.13.2+dfsg-1ubuntu0.2
+configure uuid-dev 2.39.3-9ubuntu6.6
+configure libfontconfig-dev 2.15.0-1.1ubuntu2
+configure libvulkan-dev 1.3.275.0-1build1
+configure libxkbcommon-dev 1.6.0-1build1
+configure python3-pip-whl 24.0+dfsg-1ubuntu1.3
+configure python3-setuptools-whl 68.1.2-2ubuntu1.2
+configure python3.12-venv 3.12.3-1ubuntu0.17
+configure python3-venv 3.12.3-0ubuntu2.1
+configure rustup 1.26.0-5ubuntu0.1
+configure zstd 1.5.5+dfsg2-2build1.1

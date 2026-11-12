@@ -1,13 +1,20 @@
 # Build, lint and test bayan-desktop on Linux, macOS and Windows (DESK-001), on every pull request, in the merge queue and on pushes to main.
 # Every tool is pinned and verified: actions by full commit SHA, the build tools by exact version and hash (deps/), Qt by exact
 # version through scripts/install-qt.py, which checks each archive against the SHA-256 published on download.qt.io (ADR-0017).
-# Python is the runner image's own Python 3, as in every other BayanDocs workflow, so nothing is downloaded for it; each job checks that it is
-# 3.11 or newer, which scripts/dev-setup.sh and the tests need, and prints its version.
+# The two Linux jobs run in a container from the base image that deps/ubuntu-packages.lock pins by digest (X-005; ADR-0017, amendment of
+# 2026-11-05), so that a newer runner image cannot break the install of their Ubuntu packages. scripts/ubuntu-packages.sh puts the package
+# files that the lock lists into a folder, each from the cache or else from the snapshot of Ubuntu's archive, Launchpad or the live archive,
+# checked against the lock's size and SHA-256, and then installs them with dpkg in apt's recorded order, without apt and without network.
+# Only runs on main save the folder in the cache (actions/cache), after the fetch and before the install, so it holds only checked files
+# that no package's installation program has run beside. The job "Ubuntu packages lock" (ubuntu-packages.yml) checks the lock itself.
+# Python is Ubuntu 24.04's Python 3 in the Linux containers and the runner image's own Python 3 on macOS and Windows, as in every other
+# BayanDocs workflow, so nothing is downloaded for it; each job checks that it is 3.11 or newer, which scripts/dev-setup.sh and the tests
+# need, and prints its version.
 # scripts/dev-setup.sh does the installing, so CI uses exactly what developers and cloud sessions use. scripts/test-engine-sdk.sh checks, on every
 # operating system, that the app also builds and passes its engine tests against a shared-library engine laid out like the bayan-core C SDK:
 # a stand-in built from the stub engine, and the real engine, which scripts/build-engine-sdk.sh builds from the bayan-core commit pinned in
-# deps/bayan-core.json (ADR-0002 §4, Phase 0) with the Rust version that commit pins, installed by the runner's rustup, and the crates of its
-# Cargo.lock. The real engine's mock document is what the typing, input-method and accessibility tests of DESK-002 need.
+# deps/bayan-core.json (ADR-0002 §4, Phase 0) with the Rust version that commit pins, installed by rustup (Ubuntu's rustup package from the
+# lock in the Linux containers, the runner image's own on macOS and Windows), and the crates of its Cargo.lock. The real engine's mock document is what the typing, input-method and accessibility tests of DESK-002 need.
 # The sanitizer job runs every test against the stub engine under AddressSanitizer and UndefinedBehaviorSanitizer, and then the tests that use
 # the engine against the real engine under them too (DESK-003), where the engine's thread calls the shell's callback.
 name: CI
@@ -25,15 +32,17 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  # Ubuntu packages Qt needs to build and to run headless, from the Ubuntu archive frozen at a date (same as the cloud environment, and as the C++ job of codeql.yml: tests/workflows/test_ubuntu_packages.py keeps the two workflows equal).
-  UBUNTU_SNAPSHOT: 20261027T000000Z
-  UBUNTU_PACKAGES: libgl-dev libegl-dev libvulkan-dev libxkbcommon-dev libfontconfig-dev libdbus-1-dev
-
 jobs:
   linux:
     name: Linux · verification gate
     runs-on: ubuntu-24.04
+    # A container from the base image of deps/ubuntu-packages.lock (tests/ubuntu-packages/test_lock.py keeps them equal): Ubuntu 24.04 with
+    # ca-certificates, curl and git. Its steps run as root, with bash.
+    container:
+      image: docker.io/library/buildpack-deps:noble-scm@sha256:94ed690dd634b8b2f531eaa742fde9b1264077cd8ea695a3b960bd104ae4c481 # created 2026-10-26T23:50:00Z
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 45
     permissions:
       contents: read
@@ -43,7 +52,25 @@ jobs:
           # The full history: the supply_chain.qt_release_age test finds the commit that pinned the Qt version in deps/qt.json.
           fetch-depth: 0
           persist-credentials: false
-      - name: Use the runner's own Python 3 (3.11 or newer; nothing is downloaded)
+      - name: Let git use the checkout, which belongs to the runner's user and not to the container's root
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Restore the Ubuntu package files from the cache
+        id: ubuntu-packages-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ubuntu-packages
+          key: ubuntu-packages-v1-${{ hashFiles('deps/ubuntu-packages.lock') }}
+      - name: Fetch the Ubuntu package files that deps/ubuntu-packages.lock lists, each checked against its size and SHA-256
+        run: sh scripts/ubuntu-packages.sh fetch --report "$RUNNER_TEMP/ubuntu-packages.report" deps/ubuntu-packages.lock "$RUNNER_TEMP/ubuntu-packages"
+      - name: Save them in the cache (runs on main only), before any package is installed
+        if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule') && steps.ubuntu-packages-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ubuntu-packages
+          key: ubuntu-packages-v1-${{ hashFiles('deps/ubuntu-packages.lock') }}
+      - name: Install the Ubuntu packages with dpkg, in apt's recorded order, without apt and without network
+        run: sh scripts/ubuntu-packages.sh install --report "$RUNNER_TEMP/ubuntu-packages.report" deps/ubuntu-packages.lock "$RUNNER_TEMP/ubuntu-packages"
+      - name: Use the container's Python 3 (Ubuntu 24.04's, 3.11 or newer; nothing is downloaded)
         run: |
           # Every python3 and python on PATH, in order, until one is 3.11 or newer: on Windows python3 can be the Microsoft Store's placeholder,
           # and on macOS Apple's /usr/bin/python3 is 3.9. The later steps, scripts/dev-setup.sh included, use the one found here ($PYTHON).
@@ -56,11 +83,6 @@ jobs:
           done < <(type -ap python3 python)
           echo 'No Python 3.11 or newer on PATH' >&2
           exit 1
-      - name: Install Ubuntu packages
-        run: |
-          sudo apt-get update --snapshot "$UBUNTU_SNAPSHOT"
-          # shellcheck disable=SC2086 # the package list is meant to be split into words
-          sudo apt-get install -y --no-install-recommends --snapshot "$UBUNTU_SNAPSHOT" $UBUNTU_PACKAGES
       - name: The pinned Qt release is at least 24 hours old (ADR-0017 rule 4), checked before Qt is installed and its tools run in the build
         run: '"$PYTHON" scripts/check-qt-release-age.py'
       - name: Install pinned tools and Qt
@@ -79,6 +101,13 @@ jobs:
   sanitizers:
     name: Linux · AddressSanitizer and UndefinedBehaviorSanitizer
     runs-on: ubuntu-24.04
+    # A container from the base image of deps/ubuntu-packages.lock (tests/ubuntu-packages/test_lock.py keeps them equal): Ubuntu 24.04 with
+    # ca-certificates, curl and git. Its steps run as root, with bash.
+    container:
+      image: docker.io/library/buildpack-deps:noble-scm@sha256:94ed690dd634b8b2f531eaa742fde9b1264077cd8ea695a3b960bd104ae4c481 # created 2026-10-26T23:50:00Z
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 45
     permissions:
       contents: read
@@ -88,7 +117,25 @@ jobs:
           # The full history: the supply_chain.qt_release_age test finds the commit that pinned the Qt version in deps/qt.json.
           fetch-depth: 0
           persist-credentials: false
-      - name: Use the runner's own Python 3 (3.11 or newer; nothing is downloaded)
+      - name: Let git use the checkout, which belongs to the runner's user and not to the container's root
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Restore the Ubuntu package files from the cache
+        id: ubuntu-packages-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ubuntu-packages
+          key: ubuntu-packages-v1-${{ hashFiles('deps/ubuntu-packages.lock') }}
+      - name: Fetch the Ubuntu package files that deps/ubuntu-packages.lock lists, each checked against its size and SHA-256
+        run: sh scripts/ubuntu-packages.sh fetch --report "$RUNNER_TEMP/ubuntu-packages.report" deps/ubuntu-packages.lock "$RUNNER_TEMP/ubuntu-packages"
+      - name: Save them in the cache (runs on main only), before any package is installed
+        if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule') && steps.ubuntu-packages-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ubuntu-packages
+          key: ubuntu-packages-v1-${{ hashFiles('deps/ubuntu-packages.lock') }}
+      - name: Install the Ubuntu packages with dpkg, in apt's recorded order, without apt and without network
+        run: sh scripts/ubuntu-packages.sh install --report "$RUNNER_TEMP/ubuntu-packages.report" deps/ubuntu-packages.lock "$RUNNER_TEMP/ubuntu-packages"
+      - name: Use the container's Python 3 (Ubuntu 24.04's, 3.11 or newer; nothing is downloaded)
         run: |
           # Every python3 and python on PATH, in order, until one is 3.11 or newer: on Windows python3 can be the Microsoft Store's placeholder,
           # and on macOS Apple's /usr/bin/python3 is 3.9. The later steps, scripts/dev-setup.sh included, use the one found here ($PYTHON).
@@ -101,11 +148,6 @@ jobs:
           done < <(type -ap python3 python)
           echo 'No Python 3.11 or newer on PATH' >&2
           exit 1
-      - name: Install Ubuntu packages
-        run: |
-          sudo apt-get update --snapshot "$UBUNTU_SNAPSHOT"
-          # shellcheck disable=SC2086 # the package list is meant to be split into words
-          sudo apt-get install -y --no-install-recommends --snapshot "$UBUNTU_SNAPSHOT" $UBUNTU_PACKAGES
       - name: The pinned Qt release is at least 24 hours old (ADR-0017 rule 4), checked before Qt is installed and its tools run in the build
         run: '"$PYTHON" scripts/check-qt-release-age.py'
       - name: Install pinned tools and Qt

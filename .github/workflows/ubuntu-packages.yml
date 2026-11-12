@@ -1,0 +1,45 @@
+# Checks deps/ubuntu-packages.lock against Ubuntu's signed package index (work package X-005; ADR-0017, amendment of 2026-11-05), whenever a pull request changes the lock, scripts/ubuntu-packages.sh or this file, and after such a change reaches main.
+# The Linux jobs of ci.yml and codeql.yml install exactly the files that the lock lists, checked against its sizes and SHA-256 hashes, so those hashes are the only link between CI and Ubuntu's signature. This job runs the script's lock command again from the lock's own header (its base image, snapshot date and requested packages): apt in that image fetches the snapshot's index, checks it against Ubuntu's signature with the image's keyring, and plans the install, and the script takes every path, size and hash from that verified index. The job fails unless the result is the committed lock, byte for byte. Its cutoff is now minus 24 hours, so it also fails for a snapshot date younger than that (ADR-0017 rule 4).
+# It is not a required check: a path filter skips it on most pull requests, and a required check that never runs would block merging forever (docs/scripts/github-settings.py), as for bayan-core's fuzzing workflow. The orchestrator merges only when every check that ran is green.
+# Workflow conventions (AGENTS.md): GitHub's own actions only, pinned to full commit SHAs with the version in a comment; no permissions beyond reading the repository; no credentials kept after checkout; a timeout; one concurrency group; the pull_request trigger (never pull_request_target). The job runs the pinned base image with the runner's Docker, which pulls it from Docker Hub by digest.
+name: Ubuntu packages
+
+on:
+  pull_request:
+    paths:
+      - deps/ubuntu-packages.lock
+      - scripts/ubuntu-packages.sh
+      - .github/workflows/ubuntu-packages.yml
+  push:
+    branches: [main]
+    paths:
+      - deps/ubuntu-packages.lock
+      - scripts/ubuntu-packages.sh
+      - .github/workflows/ubuntu-packages.yml
+
+permissions: {}
+
+concurrency:
+  group: ubuntu-packages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lock:
+    name: Ubuntu packages lock
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read # check out the repository
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Write the lock again from its header, with apt in its base image against the snapshot
+        run: |
+          cutoff=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          sh scripts/ubuntu-packages.sh lock --from deps/ubuntu-packages.lock --cutoff "$cutoff" --output "$RUNNER_TEMP/ubuntu-packages.lock"
+
+      - name: The committed lock is exactly what the lock command writes
+        run: diff -u deps/ubuntu-packages.lock "$RUNNER_TEMP/ubuntu-packages.lock"
