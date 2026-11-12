@@ -127,8 +127,17 @@ set_tests_properties(supply_chain.qt_release_age_tests PROPERTIES
 add_test(NAME supply_chain.qt_release_age COMMAND Python3::Interpreter "${PROJECT_SOURCE_DIR}/scripts/check-qt-release-age.py" --root "${PROJECT_SOURCE_DIR}")
 set_tests_properties(supply_chain.qt_release_age PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
 
-# The Ubuntu snapshot and package list are set in two workflows, ci.yml and the C++ job of codeql.yml (X-002); this keeps them equal.
-add_test(NAME supply_chain.workflow_ubuntu_packages COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/workflows/test_ubuntu_packages.py")
-set_tests_properties(supply_chain.workflow_ubuntu_packages PROPERTIES
+# The Ubuntu packages of the Linux CI jobs (X-005): deps/ubuntu-packages.lock is well formed, its snapshot date is not before its base image
+# was created, it configures every package it unpacks, and every job that installs it runs in its base image, and no workflow runs apt.
+add_test(NAME supply_chain.ubuntu_packages_lock COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/ubuntu-packages/test_lock.py")
+set_tests_properties(supply_chain.ubuntu_packages_lock PROPERTIES
   ENVIRONMENT "BAYAN_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
   TIMEOUT 60)
+# scripts/ubuntu-packages.sh itself, on Linux, where CI runs it: its fetch command against a local HTTPS server (sources tried in order,
+# stalls, mismatches, redirects to http://, the cache), and the checks of its lock command with a stand-in for Docker. Needs curl and openssl.
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+  add_test(NAME supply_chain.ubuntu_packages_script COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/ubuntu-packages/test_script.py")
+  set_tests_properties(supply_chain.ubuntu_packages_script PROPERTIES
+    ENVIRONMENT "BAYAN_UBUNTU_PACKAGES=${PROJECT_SOURCE_DIR}/scripts/ubuntu-packages.sh"
+    TIMEOUT 300)
+endif()
