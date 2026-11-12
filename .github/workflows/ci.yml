@@ -61,7 +61,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/ubuntu-packages
-          key: ubuntu-packages-v1-${{ hashFiles('deps/ubuntu-packages.lock') }}
+          key: ubuntu-packages-x005-evidence-2-${{ hashFiles('deps/ubuntu-packages.lock') }}
       - name: Fetch the Ubuntu package files that deps/ubuntu-packages.lock lists, each checked against its size and SHA-256
         run: sh scripts/ubuntu-packages.sh fetch --report "$RUNNER_TEMP/ubuntu-packages.report" deps/ubuntu-packages.lock "$RUNNER_TEMP/ubuntu-packages"
       - name: Save them in the cache (runs on main only), before any package is installed
@@ -70,7 +70,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/ubuntu-packages
-          key: ubuntu-packages-v1-${{ hashFiles('deps/ubuntu-packages.lock') }}
+          key: ubuntu-packages-x005-evidence-2-${{ hashFiles('deps/ubuntu-packages.lock') }}
       - name: Install the Ubuntu packages with dpkg, in apt's recorded order, without apt and without network
         run: sh scripts/ubuntu-packages.sh install --report "$RUNNER_TEMP/ubuntu-packages.report" deps/ubuntu-packages.lock "$RUNNER_TEMP/ubuntu-packages"
       - name: Use the container's Python 3 (Ubuntu 24.04's, 3.11 or newer; nothing is downloaded)
@@ -129,7 +129,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/ubuntu-packages
-          key: ubuntu-packages-v1-${{ hashFiles('deps/ubuntu-packages.lock') }}
+          key: ubuntu-packages-x005-evidence-2-${{ hashFiles('deps/ubuntu-packages.lock') }}
       - name: Fetch the Ubuntu package files that deps/ubuntu-packages.lock lists, each checked against its size and SHA-256
         run: sh scripts/ubuntu-packages.sh fetch --report "$RUNNER_TEMP/ubuntu-packages.report" deps/ubuntu-packages.lock "$RUNNER_TEMP/ubuntu-packages"
       - name: Save them in the cache (runs on main only), before any package is installed
@@ -138,7 +138,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/ubuntu-packages
-          key: ubuntu-packages-v1-${{ hashFiles('deps/ubuntu-packages.lock') }}
+          key: ubuntu-packages-x005-evidence-2-${{ hashFiles('deps/ubuntu-packages.lock') }}
       - name: Install the Ubuntu packages with dpkg, in apt's recorded order, without apt and without network
         run: sh scripts/ubuntu-packages.sh install --report "$RUNNER_TEMP/ubuntu-packages.report" deps/ubuntu-packages.lock "$RUNNER_TEMP/ubuntu-packages"
       - name: Use the container's Python 3 (Ubuntu 24.04's, 3.11 or newer; nothing is downloaded)
