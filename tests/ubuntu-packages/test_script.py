@@ -110,8 +110,9 @@ class Server:
                     server.release.wait(30)
                     return
                 if what == "redirect-http":
+                    # A fixed address, nothing taken from the request.
                     self.send_response(302)
-                    self.send_header("Location", f"http://127.0.0.1:{server.http_port}/{name}")
+                    self.send_header("Location", f"http://127.0.0.1:{server.http_port}/redirected.deb")
                     self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
@@ -139,6 +140,7 @@ class Server:
         self.https = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.https.daemon_threads = True
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2  # as the script's curl requires (--tlsv1.2)
         context.load_cert_chain(certificate, key)
         self.https.socket = context.wrap_socket(self.https.socket, server_side=True)
         self.http = http.server.ThreadingHTTPServer(("127.0.0.1", 0), PlainHandler)
@@ -218,6 +220,12 @@ class Fetch(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertCacheHoldsEveryFile()
         self.assertEqual(self.report_counts()["launchpad"], 2)
+        # Each failed attempt is in the log with its error, so a summary that counts files from a later source can be explained.
+        for package in PACKAGES:
+            self.assertIn(
+                f"{package.file}: could not download from {self.server.url('snapshot')}/{SNAPSHOT}/{package.pool} (curl: (22)", result.stderr
+            )
+            self.assertIn("404); trying the next source", result.stderr)
         result = self.fetch(snapshot="missing", launchpad="missing", archive="serve")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.report_counts()["cache"], 2)  # the files of the first run are now in the cache folder

@@ -474,7 +474,11 @@ fetch_file() {
       say "$name from $url $problem. It may have been tampered with, so no other source is tried and the job stops here."
       return 1
     fi
-    errors="$errors; $url: $(tr '\n' ' ' <"$partial/$name.error" | sed 's/ *$//')"
+    error=$(tr '\n' ' ' <"$partial/$name.error" | sed 's/ *$//')
+    errors="$errors; $url: $error"
+    if [ "$source" != archive ]; then
+      say "$name: could not download from $url ($error); trying the next source"
+    fi
   done
   say "could not download $name from any source: ${errors#; }"
   return 1
