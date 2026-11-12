@@ -175,7 +175,7 @@ The editable line during composition, from top to bottom: Japanese kana being co
 
 ```sh
 # The Ubuntu 24.04 packages installed for this report, on a cloud computer that already had xvfb and Mesa, from Ubuntu's archive frozen at
-# CI's date (UBUNTU_SNAPSHOT in .github/workflows/ci.yml): the libxcb ones for Qt's xcb plugin, the others for the AT-SPI check, to which
+# CI's date (then UBUNTU_SNAPSHOT in .github/workflows/ci.yml; now the snapshot line of deps/ubuntu-packages.lock): the libxcb ones for Qt's xcb plugin, the others for the AT-SPI check, to which
 # apt adds gir1.2-freedesktop and libatk-adaptor
 sudo apt-get update --snapshot 20261003T000000Z
 sudo apt-get install --no-install-recommends --snapshot 20261003T000000Z libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 at-spi2-core python3-pyatspi gir1.2-atspi-2.0
