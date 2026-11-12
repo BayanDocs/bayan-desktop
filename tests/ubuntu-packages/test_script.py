@@ -110,8 +110,9 @@ class Server:
                     server.release.wait(30)
                     return
                 if what == "redirect-http":
+                    # A fixed address, nothing taken from the request.
                     self.send_response(302)
-                    self.send_header("Location", f"http://127.0.0.1:{server.http_port}/{name}")
+                    self.send_header("Location", f"http://127.0.0.1:{server.http_port}/redirected.deb")
                     self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
@@ -139,6 +140,7 @@ class Server:
         self.https = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.https.daemon_threads = True
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2  # as the script's curl requires (--tlsv1.2)
         context.load_cert_chain(certificate, key)
         self.https.socket = context.wrap_socket(self.https.socket, server_side=True)
         self.http = http.server.ThreadingHTTPServer(("127.0.0.1", 0), PlainHandler)
