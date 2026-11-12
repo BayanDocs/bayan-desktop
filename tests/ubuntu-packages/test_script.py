@@ -307,6 +307,16 @@ class Fetch(unittest.TestCase):
         self.assertIn("every source address must start with https://", result.stderr)
         self.assertEqual((self.server.requests, self.server.http_requests), ([], []))
 
+    def test_a_pool_path_with_a_dot_or_dot_dot_directory_is_refused(self) -> None:
+        for directories in ("pool/main/../..", "pool/main/h/."):
+            with self.subTest(directories):
+                path = f"{directories}/{PACKAGES[0].file}"
+                self.lock.write_text(lock_text().replace(PACKAGES[0].pool, path), encoding="utf-8")
+                result = self.fetch(snapshot="serve", launchpad="serve", archive="serve")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f'a pool path with a "." or ".." directory: {path}', result.stderr)
+                self.assertEqual(self.server.requests, [])
+
     def test_a_lock_that_was_edited_by_hand_is_refused(self) -> None:
         self.lock.write_text(lock_text().replace("configure hello-data 2.10-3build2\n", ""), encoding="utf-8")
         result = self.fetch(snapshot="serve")
@@ -477,6 +487,105 @@ class Lock(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(message, result.stderr)
         self.assertEqual(self.docker_runs(), [])
+
+
+# Stand-ins for install's tools, put first on PATH: dpkg records its arguments and answers --audit with $FAKE_DPKG_AUDIT; dpkg-query
+# prints each queried package's line ("<package> <status> <version>") from $FAKE_DPKG_STATE; id says root, so the tests run as any user.
+FAKE_DPKG = """\
+#!/bin/sh
+printf '%s\\n' "$*" >>"$FAKE_DPKG_LOG"
+if [ "$*" = --audit ]; then printf '%s' "${FAKE_DPKG_AUDIT:-}"; fi
+"""
+
+FAKE_DPKG_QUERY = """\
+#!/bin/sh
+shift 3
+status=0
+for package in "$@"; do
+  line=$(awk -v p="$package" '$1 == p { print; exit }' "$FAKE_DPKG_STATE")
+  if [ -n "$line" ]; then printf '%s\\n' "$line"; else echo "dpkg-query: no packages found matching $package" >&2; status=1; fi
+done
+exit $status
+"""
+
+FAKE_ID = """\
+#!/bin/sh
+echo 0
+"""
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "the script runs on Linux")
+class Install(unittest.TestCase):
+    """install's checks of the result, with stand-ins for dpkg, dpkg-query and id (as the Lock tests stand in for Docker), so that the
+    tests change nothing on the machine and pass whether or not the gate runs as root."""
+
+    def setUp(self) -> None:
+        self.work = Path(tempfile.mkdtemp(prefix="ubuntu-packages-install-test-"))
+        self.addCleanup(shutil.rmtree, self.work, True)
+        self.bin = self.work / "bin"
+        self.bin.mkdir()
+        for name, text in (("dpkg", FAKE_DPKG), ("dpkg-query", FAKE_DPKG_QUERY), ("id", FAKE_ID)):
+            (self.bin / name).write_text(text, encoding="utf-8")
+            (self.bin / name).chmod(0o755)
+        self.lock = self.work / "ubuntu-packages.lock"
+        self.lock.write_text(lock_text(), encoding="utf-8")
+        self.folder = self.work / "cache"
+        self.folder.mkdir()
+        for package in PACKAGES:
+            (self.folder / package.file).write_bytes(package.content)
+        self.log = self.work / "dpkg.log"
+        self.state = self.work / "dpkg-state"
+        self.state.write_text("".join(f"{p.name} ii {p.version}\n" for p in PACKAGES), encoding="utf-8")
+
+    def install(self, audit: str = "") -> subprocess.CompletedProcess[str]:
+        environment = clean_environment(
+            PATH=f"{self.bin}{os.pathsep}{os.environ.get('PATH', '')}",
+            FAKE_DPKG_LOG=str(self.log),
+            FAKE_DPKG_AUDIT=audit,
+            FAKE_DPKG_STATE=str(self.state),
+        )
+        return subprocess.run(
+            ["sh", str(SCRIPT), "install", str(self.lock), str(self.folder)], env=environment, capture_output=True, text=True, timeout=60
+        )
+
+    def test_replays_the_plan_and_succeeds_when_dpkg_reports_everything_installed(self) -> None:
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("installed the 2 packages", result.stderr)
+        options = "--no-triggers --force-confdef --force-confold"
+        self.assertEqual(
+            self.log.read_text(encoding="utf-8").splitlines(),
+            [
+                f"--unpack --auto-deconfigure {options} {PACKAGES[0].file} {PACKAGES[1].file}",
+                f"--configure {options} {PACKAGES[0].name} {PACKAGES[1].name}",
+                "--configure --pending",
+                "--audit",
+            ],
+        )
+
+    def test_fails_when_dpkg_audit_reports_a_problem(self) -> None:
+        audit = "The following packages are only half configured, probably due to problems\nconfiguring them the first time.\n hello-data\n"
+        result = self.install(audit=audit)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("dpkg --audit reports unfinished packages: The following packages are only half configured", result.stderr)
+        self.assertNotIn("installed the", result.stderr)
+
+    def test_fails_when_a_locked_package_is_not_installed_at_its_locked_version(self) -> None:
+        first = f"{PACKAGES[0].name} ii {PACKAGES[0].version}\n"
+        cases = {
+            "another version": (first + f"{PACKAGES[1].name} ii 2.10-3build1\n", "ii 2.10-3build1"),
+            "unpacked, not configured": (first + f"{PACKAGES[1].name} iU {PACKAGES[1].version}\n", f"iU {PACKAGES[1].version}"),
+            "not installed": (first, "not installed"),
+        }
+        for name, (state, shown) in cases.items():
+            with self.subTest(name):
+                self.state.write_text(state, encoding="utf-8")
+                result = self.install()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    f"these packages are not installed at their locked versions: {PACKAGES[1].name} {PACKAGES[1].version}: {shown};", result.stderr
+                )
+                self.assertNotIn("installed the", result.stderr)
 
 
 if __name__ == "__main__":

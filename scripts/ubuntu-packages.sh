@@ -155,6 +155,7 @@ lock_plan() {
       if (!package($2) || !version($3) || ($4 != "amd64" && $4 != "all")) bad("malformed package, version or architecture")
       file = $5; sub(/^.*\//, "", file); plain = $3; sub(/^[0-9]+:/, "", plain)
       if ($5 !~ /^pool\/[a-z0-9-]+\/[a-z0-9+.-]+\/[a-z0-9+.-]+\/[A-Za-z0-9+.~_-]+\.deb$/ || file != $2 "_" plain "_" $4 ".deb") bad("not the pool path of this package: " $5)
+      if (index("/" $5 "/", "/./") || index("/" $5 "/", "/../")) bad("a pool path with a \".\" or \"..\" directory: " $5)
       if ($6 !~ /^[1-9][0-9]*$/ || !hex($7, 64)) bad("malformed size or SHA-256")
       if ($2 in unpacked) bad("the package is unpacked twice: " $2)
       unpacked[$2] = $3; units++; print; next
@@ -598,8 +599,9 @@ cmd_install() {
   # shellcheck disable=SC2016,SC2046 # ${...} is dpkg-query's format; one package name per word
   dpkg-query -W -f '${Package} ${db:Status-Abbrev}${Version}\n' $(awk '{ print $1 }' "$work/expected") >"$work/installed" 2>&1 || true
   set +f
-  awk 'NR == FNR { state[$1] = $2 " " $3; next } state[$1] != "ii " $2 { print $1 " " $2 ": " (($1 in state) ? state[$1] : "not installed"); bad = 1 }
-       END { exit bad }' "$work/installed" "$work/expected" >"$work/wrong" ||
+  # ($1 in state) before state[$1]: in awk, reading an element that is not there creates it.
+  awk 'NR == FNR { state[$1] = $2 " " $3; next } { actual = ($1 in state) ? state[$1] : "not installed" }
+       actual != "ii " $2 { print $1 " " $2 ": " actual; bad = 1 } END { exit bad }' "$work/installed" "$work/expected" >"$work/wrong" ||
     die "these packages are not installed at their locked versions: $(tr '\n' ';' <"$work/wrong")"
   seconds=$(($(date +%s) - start))
   packages=$(wc -l <"$work/expected" | tr -d ' ')

@@ -31,7 +31,8 @@ CREATED = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z")
 SNAPSHOT = re.compile(r"\d{8}T\d{6}Z")
 PACKAGE = re.compile(r"[a-z0-9][a-z0-9.+-]+")
 VERSION = re.compile(r"[0-9][0-9A-Za-z.+~:-]*")
-POOL = re.compile(r"pool/[a-z0-9-]+/[a-z0-9+.-]+/[a-z0-9+.-]+/[A-Za-z0-9+.~_-]+\.deb")
+# pool/<component>/<prefix>/<source package>/<file>; neither directory may be "." or "..".
+POOL = re.compile(r"pool/[a-z0-9-]+/(?!\.\.?/)[a-z0-9+.-]+/(?!\.\.?/)[a-z0-9+.-]+/[A-Za-z0-9+.~_-]+\.deb")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -195,11 +196,14 @@ def installing_jobs(workflow: str) -> dict[str, str | None]:
     return result
 
 
-APT_COMMAND = re.compile(r"\bapt(?:-get)?\s+(?:-\S+\s+)*(?:install|update|upgrade|dist-upgrade|full-upgrade)\b|--snapshot\b|\bapt-get\b")
+# apt, its --snapshot option, or a snapshot ID such as 20261111T000000Z (for example a workflow variable that holds one).
+APT_COMMAND = re.compile(
+    r"\bapt(?:-get)?\s+(?:-\S+\s+)*(?:install|update|upgrade|dist-upgrade|full-upgrade)\b|--snapshot\b|\bapt-get\b|\b\d{8}T\d{6}Z\b"
+)
 
 
 def apt_lines(workflow: str) -> list[str]:
-    """The lines of a workflow, comments aside, that run apt or name a snapshot date."""
+    """The lines of a workflow, comments aside (whole comment lines and trailing comments), that run apt or name a snapshot date."""
     return [line.strip() for line in workflow.splitlines() if not line.lstrip().startswith("#") and APT_COMMAND.search(strip_comment(line))]
 
 
@@ -307,6 +311,8 @@ class TheChecksThemselves(unittest.TestCase):
             "unsorted requests": EXAMPLE_LOCK.replace("request hello\n", "request hello\nrequest abc\n"),
             "a pool path of another package": EXAMPLE_LOCK.replace("pool/main/h/hello/hello_2.10", "pool/main/h/hello/other_2.10"),
             "a path outside the pool": EXAMPLE_LOCK.replace("pool/main/h/hello/hello_", "pool/../h/hello/hello_"),
+            "'..' as pool directories": EXAMPLE_LOCK.replace("pool/main/h/hello/hello_", "pool/main/../../hello_"),
+            "'.' as a pool directory": EXAMPLE_LOCK.replace("pool/main/h/hello/hello_", "pool/main/h/./hello_"),
             "a short SHA-256": EXAMPLE_LOCK.replace("0000000000000000000000000000000000000000000000000000000000000002", "02"),
             "an unknown line": EXAMPLE_LOCK + "remove hello\n",
             "a missing header line": EXAMPLE_LOCK.replace("architecture amd64\n", ""),
@@ -333,9 +339,13 @@ class TheChecksThemselves(unittest.TestCase):
         self.assertEqual(apt_lines(EXAMPLE_WORKFLOW), [])
         self.assertEqual(len(apt_lines("      - run: sudo apt-get install -y libgl-dev\n")), 1)
         self.assertEqual(len(apt_lines("      - run: apt -y install zstd\n")), 1)
-        self.assertEqual(len(apt_lines("  UBUNTU_SNAPSHOT: 20261027T000000Z # for apt --snapshot\n")), 0)
         self.assertEqual(len(apt_lines("      run: dpkg-query --snapshot 1\n")), 1)
         self.assertEqual(len(apt_lines("      # sudo apt-get update --snapshot 20261027T000000Z\n")), 0)
+        # A bare snapshot ID outside a comment, such as the value of the old UBUNTU_SNAPSHOT variable, is found; one only in a comment is not.
+        self.assertEqual(len(apt_lines("  UBUNTU_SNAPSHOT: 20261027T000000Z # for apt --snapshot\n")), 1)
+        self.assertEqual(len(apt_lines("        run: echo 20261111T000000Z\n")), 1)
+        self.assertEqual(len(apt_lines("    # the lock's snapshot, 20261111T000000Z\n")), 0)
+        self.assertEqual(len(apt_lines("      image: buildpack-deps@sha256:94ed # created 2026-10-26T23:50:00Z, snapshot 20261111T000000Z\n")), 0)
 
 
 if __name__ == "__main__":
