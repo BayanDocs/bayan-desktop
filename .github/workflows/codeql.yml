@@ -143,6 +143,8 @@ jobs:
     # A container from the base image of deps/ubuntu-packages.lock (tests/ubuntu-packages/test_lock.py keeps them equal), as in ci.yml's Linux jobs.
     container:
       image: docker.io/library/buildpack-deps:noble-scm@sha256:94ed690dd634b8b2f531eaa742fde9b1264077cd8ea695a3b960bd104ae4c481 # created 2026-10-26T23:50:00Z
+      # X-005 AC-5 (draft, not to be merged): snapshot.ubuntu.com points nowhere, so every file must come from Launchpad.
+      options: --add-host snapshot.ubuntu.com:127.0.0.1
     timeout-minutes: 45
     permissions:
       contents: read # check out the repository
@@ -173,7 +175,8 @@ jobs:
         run: sh scripts/ubuntu-packages.sh fetch --report "$RUNNER_TEMP/ubuntu-packages.report" deps/ubuntu-packages.lock "$RUNNER_TEMP/ubuntu-packages"
 
       - name: Save them in the cache (runs on main only), before any package is installed
-        if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule') && steps.ubuntu-packages-cache.outputs.cache-hit != 'true' }}
+        # X-005 AC-7 (draft, not to be merged): this pull request saves the cache too, so that its second run restores it.
+        if: ${{ steps.ubuntu-packages-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/ubuntu-packages
