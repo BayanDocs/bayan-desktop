@@ -151,9 +151,11 @@ void TestTiles::refusesNonsenseSettings() {
   QCOMPARE(TileGrid(std::numeric_limits<double>::quiet_NaN(), 512).scale(), 1.0);
   QCOMPARE(TileGrid(1.0, 1).tileSize(), TileGrid::kMinimumTileSize);
   QCOMPARE(TileGrid(1.0, 100'000).tileSize(), TileGrid::kMaximumTileSize);
-  const ViewGeometry view({kLetter}, {.zoom = std::numeric_limits<double>::infinity(),
-                                      .devicePixelRatio = 0.0,
-                                      .viewportSize = QSizeF(-5, std::numeric_limits<double>::quiet_NaN())});
+  const ViewGeometry view({kLetter}, {
+                                         .zoom = std::numeric_limits<double>::infinity(),
+                                         .devicePixelRatio = 0.0,
+                                         .viewportSize = QSizeF(-5, std::numeric_limits<double>::quiet_NaN()),
+                                     });
   QCOMPARE(view.scale(), 1.0);
   QCOMPARE(view.state().viewportSize, QSizeF(0, 0));
 }
@@ -200,11 +202,13 @@ void TestTiles::placesPagesOnWholeDevicePixels() {
   QFETCH(QPointF, sceneOffset);
   QFETCH(QPointF, contentPosition);
   const auto pages = threePages();
-  const ViewGeometry view(pages, {.zoom = zoom,
-                                  .devicePixelRatio = ratio,
-                                  .viewportSize = QSizeF(900, 700),
-                                  .contentPosition = contentPosition,
-                                  .sceneOffset = sceneOffset});
+  const ViewGeometry view(pages, {
+                                     .zoom = zoom,
+                                     .devicePixelRatio = ratio,
+                                     .viewportSize = QSizeF(900, 700),
+                                     .contentPosition = contentPosition,
+                                     .sceneOffset = sceneOffset,
+                                 });
   const TileGrid grid(view.scale(), 512);
   for (const protocol::Page &page : pages) {
     // Every tile of the display's scale starts on a whole device pixel of the window and is exactly its pixels' size.

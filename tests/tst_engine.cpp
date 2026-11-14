@@ -38,12 +38,14 @@ constexpr qint64 kBluPerDip = 19'050;
 QJsonObject helloPayload() { return QJsonObject{{u"protocol_versions"_s, QJsonArray{bayan::Engine::kProtocolVersion}}}; }
 
 QJsonObject pageRequest(qint64 x, qint64 y, qint64 width, qint64 height) {
-  return QJsonObject{{u"doc_id"_s, 1},
-                     {u"page"_s, 0},
-                     {u"rect"_s, QJsonObject{{u"x"_s, x}, {u"y"_s, y}, {u"width"_s, width}, {u"height"_s, height}}},
-                     {u"zoom"_s, 1.0},
-                     {u"device_scale"_s, 1.0},
-                     {u"mode"_s, u"interactive"_s}};
+  return QJsonObject{
+      {u"doc_id"_s, 1},
+      {u"page"_s, 0},
+      {u"rect"_s, QJsonObject{{u"x"_s, x}, {u"y"_s, y}, {u"width"_s, width}, {u"height"_s, height}}},
+      {u"zoom"_s, 1.0},
+      {u"device_scale"_s, 1.0},
+      {u"mode"_s, u"interactive"_s},
+  };
 }
 
 // An event the engine sends, for the tests that hand the wrapper messages as if from the engine (tests/support/enginemessages.h).
@@ -55,12 +57,19 @@ QJsonObject progressEvent() {
 
 // What the engine answers a request of the type no.such.message, which the tests below post.
 QJsonObject unsupportedReply(qint64 requestId) {
-  return QJsonObject{{u"v"_s, bayan::Engine::kProtocolVersion},
-                     {u"re"_s, requestId},
-                     {u"ok"_s, false},
-                     {u"error"_s, QJsonObject{{u"code"_s, u"unsupported_message"_s},
-                                              {u"message_id"_s, u"engine-error-unsupported-message"_s},
-                                              {u"args"_s, QJsonObject{{u"type"_s, u"no.such.message"_s}}}}}};
+  return QJsonObject{
+      {u"v"_s, bayan::Engine::kProtocolVersion},
+      {u"re"_s, requestId},
+      {u"ok"_s, false},
+      {
+          u"error"_s,
+          QJsonObject{
+              {u"code"_s, u"unsupported_message"_s},
+              {u"message_id"_s, u"engine-error-unsupported-message"_s},
+              {u"args"_s, QJsonObject{{u"type"_s, u"no.such.message"_s}}},
+          },
+      },
+  };
 }
 
 // Waits for the reply to one request and returns its arguments (requestId, ok, payload, error).
@@ -328,17 +337,23 @@ void TestEngine::malformedEngineMessagesAreProtocolErrors() {
   const QList<Malformed> malformed{
       {.json = "not json"_ba, .brokenAt = {}, .why = u"not JSON"_s},
       {.json = "[1, 2, 3]"_ba, .brokenAt = {}, .why = u"not an object"_s},
-      {.json =
-           R"({"v":5,"type":"view.layout.progress","seq":1,"payload":{"doc_id":1,"pages_laid_out":1,"page_count_estimate":1,"complete":true}})"_ba,
-       .brokenAt = u"/v"_s,
-       .why = u"another protocol version"_s},
-      {.json = R"({"v":0,"seq":1,"payload":{"doc_id":1,"pages_laid_out":1,"page_count_estimate":1,"complete":true}})"_ba,
-       .brokenAt = u"/type"_s,
-       .why = u"no type, so neither an event nor a reply"_s},
+      {
+          .json =
+              R"({"v":5,"type":"view.layout.progress","seq":1,"payload":{"doc_id":1,"pages_laid_out":1,"page_count_estimate":1,"complete":true}})"_ba,
+          .brokenAt = u"/v"_s,
+          .why = u"another protocol version"_s,
+      },
+      {
+          .json = R"({"v":0,"seq":1,"payload":{"doc_id":1,"pages_laid_out":1,"page_count_estimate":1,"complete":true}})"_ba,
+          .brokenAt = u"/type"_s,
+          .why = u"no type, so neither an event nor a reply"_s,
+      },
       {.json = R"({"v":0,"re":0,"ok":true,"payload":{}})"_ba, .brokenAt = u"/re"_s, .why = u"an invalid request identifier"_s},
-      {.json = R"({"v":0,"re":3,"ok":"yes","error":{"code":"internal","message_id":"engine-error-internal","args":{}}})"_ba,
-       .brokenAt = u"/ok"_s,
-       .why = u"ok is not a boolean"_s},
+      {
+          .json = R"({"v":0,"re":3,"ok":"yes","error":{"code":"internal","message_id":"engine-error-internal","args":{}}})"_ba,
+          .brokenAt = u"/ok"_s,
+          .why = u"ok is not a boolean"_s,
+      },
   };
   for (const auto &[json, brokenAt, why] : malformed) {
     QVERIFY(bayan::test::deliverMalformed(*engine, json, brokenAt, why));
@@ -397,7 +412,8 @@ void TestEngine::theMessageHelpersHandOverNothingOfTheWrongKind() {
   // engine.error with its fields nested under error, as the tests used to write it: the engine never sends it.
   const QJsonObject nested{
       {u"error"_s, QJsonObject{{u"code"_s, u"internal"_s}, {u"message_id"_s, u"engine-error-internal"_s}, {u"args"_s, QJsonObject{}}}},
-      {u"recoverable"_s, true}};
+      {u"recoverable"_s, true},
+  };
   const QJsonObject nestedError = bayan::test::engineEvent(u"engine.error"_s, nested);
   refusal(u"The engine could not send"_s);
   QVERIFY(!bayan::test::deliver(*engine, nestedError));

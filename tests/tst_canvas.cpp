@@ -151,16 +151,20 @@ void sendIme(QObject *target, const QString &preedit, const QList<QInputMethodEv
 QList<QInputMethodEvent::Attribute> clause(int start, int length, int cursor) {
   QTextCharFormat selected;
   selected.setBackground(Qt::black);
-  return {QInputMethodEvent::Attribute(QInputMethodEvent::TextFormat, start, length, selected),
-          QInputMethodEvent::Attribute(QInputMethodEvent::Cursor, cursor, 0, QVariant())};
+  return {
+      QInputMethodEvent::Attribute(QInputMethodEvent::TextFormat, start, length, selected),
+      QInputMethodEvent::Attribute(QInputMethodEvent::Cursor, cursor, 0, QVariant()),
+  };
 }
 
 // What a plain composition looks like: an underlined text and a visible cursor.
 QList<QInputMethodEvent::Attribute> underlined(int length, int cursor) {
   QTextCharFormat format;
   format.setFontUnderline(true);
-  return {QInputMethodEvent::Attribute(QInputMethodEvent::TextFormat, 0, length, format),
-          QInputMethodEvent::Attribute(QInputMethodEvent::Cursor, cursor, 1, QVariant())};
+  return {
+      QInputMethodEvent::Attribute(QInputMethodEvent::TextFormat, 0, length, format),
+      QInputMethodEvent::Attribute(QInputMethodEvent::Cursor, cursor, 1, QVariant()),
+  };
 }
 
 // Plays a platform's input context for the canvas, which the offscreen platform lacks. Like Qt 6.12's Windows input context, it ignores
@@ -365,12 +369,14 @@ void TestCanvas::standInsAreDrawnInTheOrderGiven() {
   QImage image(16, 16, QImage::Format_RGBA8888_Premultiplied);
   image.fill(Qt::white);
   const auto standIn = [&image](double scale) {
-    return bayan::CanvasTile{.key = {.page = 0, .scale = scale, .column = 0, .row = 0},
-                             .rect = QRectF(0, 0, 16, 16),
-                             .image = image,
-                             .version = 1,
-                             .current = false,
-                             .exact = false};
+    return bayan::CanvasTile{
+        .key = {.page = 0, .scale = scale, .column = 0, .row = 0},
+        .rect = QRectF(0, 0, 16, 16),
+        .image = image,
+        .version = 1,
+        .current = false,
+        .exact = false,
+    };
   };
   const bayan::CanvasTile blurry = standIn(1.0);
   const bayan::CanvasTile sharp = standIn(1.25);
@@ -522,13 +528,15 @@ void TestCanvas::scrollWithKeyScrollsLikeAFocusedScroller() {
   QVERIFY(canvas.scrollWithKey(Qt::Key_Left, none));
   QTRY_COMPARE(canvas.contentX(), left);
   // Other keys and modifiers are not the area's.
-  for (const auto &[key, modifiers] : std::vector<std::pair<int, int>>{{Qt::Key_PageDown, flags(Qt::ShiftModifier)},
-                                                                       {Qt::Key_Home, flags(Qt::AltModifier)},
-                                                                       {Qt::Key_Down, flags(Qt::ControlModifier)},
-                                                                       {Qt::Key_A, none},
-                                                                       {Qt::Key_Tab, none},
-                                                                       {Qt::Key_Space, none},
-                                                                       {Qt::Key_Return, none}}) {
+  for (const auto &[key, modifiers] : std::vector<std::pair<int, int>>{
+           {Qt::Key_PageDown, flags(Qt::ShiftModifier)},
+           {Qt::Key_Home, flags(Qt::AltModifier)},
+           {Qt::Key_Down, flags(Qt::ControlModifier)},
+           {Qt::Key_A, none},
+           {Qt::Key_Tab, none},
+           {Qt::Key_Space, none},
+           {Qt::Key_Return, none},
+       }) {
     QVERIFY2(!canvas.scrollWithKey(key, modifiers), qPrintable(u"key %1, modifiers %2"_s.arg(key).arg(modifiers)));
   }
 }

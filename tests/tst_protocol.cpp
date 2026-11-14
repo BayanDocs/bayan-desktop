@@ -52,8 +52,10 @@ QJsonObject sampleTree() {
   QJsonObject line = textNode(6, u"paragraph"_s, u"ab"_s);
   line.insert(u"editable"_s, true);
   line.insert(u"bounds"_s, QJsonObject{{u"page"_s, 1}, {u"rect"_s, rect(0, 0, 1000, 100)}});
-  line.insert(u"chars"_s, QJsonArray{QJsonObject{{u"start"_s, 0}, {u"end"_s, 1}, {u"rect"_s, rect(0, 0, 10, 100)}},
-                                     QJsonObject{{u"start"_s, 1}, {u"end"_s, 2}, {u"rect"_s, rect(10, 0, 10, 100)}}});
+  line.insert(u"chars"_s, QJsonArray{
+                              QJsonObject{{u"start"_s, 0}, {u"end"_s, 1}, {u"rect"_s, rect(0, 0, 10, 100)}},
+                              QJsonObject{{u"start"_s, 1}, {u"end"_s, 2}, {u"rect"_s, rect(10, 0, 10, 100)}},
+                          });
   return QJsonObject{{u"id"_s, 1}, {u"role"_s, u"document"_s}, {u"name"_s, u"Sample"_s}, {u"children"_s, QJsonArray{heading, table, line}}};
 }
 
@@ -142,9 +144,14 @@ void TestProtocol::overlaysHaveACaretOrNullAndSelectionsPerPage() {
   const QJsonArray selection{QJsonObject{{u"page"_s, 1}, {u"rects"_s, QJsonArray{rect(0, 0, 1, 1), rect(2, 0, 1, 1)}}}};
   QVERIFY(matches(caret, u"Caret"_s));
   QVERIFY(matches(selection.at(0), u"SelectionRects"_s));
-  const Overlay expected{.caret = Caret{.page = 0, .rect = {.x = 1, .y = 2, .width = 3, .height = 4}, .visible = true},
-                         .selection = {{.page = 1, .rect = {.x = 0, .y = 0, .width = 1, .height = 1}},
-                                       {.page = 1, .rect = {.x = 2, .y = 0, .width = 1, .height = 1}}}};
+  const Overlay expected{
+      .caret = Caret{.page = 0, .rect = {.x = 1, .y = 2, .width = 3, .height = 4}, .visible = true},
+      .selection =
+          {
+              {.page = 1, .rect = {.x = 0, .y = 0, .width = 1, .height = 1}},
+              {.page = 1, .rect = {.x = 2, .y = 0, .width = 1, .height = 1}},
+          },
+  };
   QCOMPARE(parseOverlay(QJsonObject{{u"caret"_s, caret}, {u"selection"_s, selection}}, 2), expected);
   QCOMPARE(parseOverlay(QJsonObject{{u"caret"_s, QJsonValue::Null}, {u"selection"_s, QJsonArray{}}}, 1), Overlay{});
 
@@ -308,6 +315,7 @@ void TestProtocol::inputPayloadsHaveTheProtocolsShape() {
   QVERIFY(key.value(u"repeat"_s).toBool() && !key.value(u"composing"_s).toBool());
 
   const QJsonObject pointer = pointerPayload(
+      // NOLINTNEXTLINE(readability-trailing-comma): clang-tidy 23 takes the comma after the empty {} for a trailing comma of that list.
       {.kind = PointerKind::Up, .position = QPointF(1.5, 2), .button = 2, .clicks = 2, .modifiers = {}, .pointerType = PointerType::Pen});
   QCOMPARE(pointer.value(u"kind"_s).toString(), u"up"_s);
   QCOMPARE(pointer.value(u"x"_s).toDouble(), 1.5);

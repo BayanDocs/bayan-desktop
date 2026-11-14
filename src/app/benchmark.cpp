@@ -371,10 +371,14 @@ void Benchmark::writeResults() {
       {u"cpu_architecture"_s, QSysInfo::currentCpuArchitecture()},
       {u"qpa_platform"_s, QGuiApplication::platformName()},
       {u"graphics_api"_s, graphicsApiName(*window_)},
-      {u"screen"_s,
-       QJsonObject{{u"refresh_rate"_s, screen != nullptr ? screen->refreshRate() : 0.0},
-                   {u"device_pixel_ratio"_s, window_->effectiveDevicePixelRatio()},
-                   {u"logical_size"_s, screen != nullptr ? QJsonArray{screen->size().width(), screen->size().height()} : QJsonArray{}}}},
+      {
+          u"screen"_s,
+          QJsonObject{
+              {u"refresh_rate"_s, screen != nullptr ? screen->refreshRate() : 0.0},
+              {u"device_pixel_ratio"_s, window_->effectiveDevicePixelRatio()},
+              {u"logical_size"_s, screen != nullptr ? QJsonArray{screen->size().width(), screen->size().height()} : QJsonArray{}},
+          },
+      },
       {u"canvas_size"_s, QJsonArray{canvas_->width(), canvas_->height()}},
       {u"tile_size"_s, canvas_->tileSize()},
       {u"tile_cache_budget_bytes"_s, canvas_->tileCache().budget()},

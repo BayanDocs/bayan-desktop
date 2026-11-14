@@ -39,15 +39,20 @@ void DocumentSession::start() {
 
 void DocumentSession::startSession() {
   const QJsonObject shell{
-      {u"name"_s, u"bayan-desktop"_s}, {u"version"_s, QCoreApplication::applicationVersion()}, {u"platform"_s, QSysInfo::productType()}};
+      {u"name"_s, u"bayan-desktop"_s},
+      {u"version"_s, QCoreApplication::applicationVersion()},
+      {u"platform"_s, QSysInfo::productType()},
+  };
   // The canvas forwards input-method composition and bridges the accessibility tree to the platform (DESK-002); no clipboard yet.
   const QJsonObject capabilities{{u"clipboard_formats"_s, QJsonArray{}}, {u"ime"_s, true}, {u"accessibility"_s, true}};
   welcomed_ = false;
-  helloRequest_ = engine_.request(u"hello"_s, QJsonObject{{u"protocol_versions"_s, QJsonArray{Engine::kProtocolVersion}},
-                                                          {u"shell"_s, shell},
-                                                          {u"capabilities"_s, capabilities},
-                                                          {u"locale"_s, QLocale().bcp47Name()},
-                                                          {u"theme"_s, themeName()}});
+  helloRequest_ = engine_.request(u"hello"_s, QJsonObject{
+                                                  {u"protocol_versions"_s, QJsonArray{Engine::kProtocolVersion}},
+                                                  {u"shell"_s, shell},
+                                                  {u"capabilities"_s, capabilities},
+                                                  {u"locale"_s, QLocale().bcp47Name()},
+                                                  {u"theme"_s, themeName()},
+                                              });
   if (helloRequest_ == 0) {
     fail();
   }
@@ -187,12 +192,14 @@ void DocumentSession::sendView() {
   if (sentView_ == view_) {
     return;
   }
-  const qint64 request = engine_.request(u"view.set"_s, QJsonObject{{u"doc_id"_s, documentId_},
-                                                                    {u"viewport"_s, toJson(view_.viewport)},
-                                                                    {u"zoom"_s, view_.zoom},
-                                                                    {u"device_scale"_s, view_.deviceScale},
-                                                                    {u"mode"_s, u"print"_s},
-                                                                    {u"show_formatting_marks"_s, false}});
+  const qint64 request = engine_.request(u"view.set"_s, QJsonObject{
+                                                            {u"doc_id"_s, documentId_},
+                                                            {u"viewport"_s, toJson(view_.viewport)},
+                                                            {u"zoom"_s, view_.zoom},
+                                                            {u"device_scale"_s, view_.deviceScale},
+                                                            {u"mode"_s, u"print"_s},
+                                                            {u"show_formatting_marks"_s, false},
+                                                        });
   if (request == 0) {
     fail();
     return;

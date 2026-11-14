@@ -73,7 +73,7 @@ int main(int argc, char *argv[]) {
 
   if (parser.isSet(tileSizeOption)) {
     const QList<QObject *> roots = qml.rootObjects();
-    auto *window = roots.isEmpty() ? nullptr : qobject_cast<QQuickWindow *>(roots.constFirst());
+    const auto *window = roots.isEmpty() ? nullptr : qobject_cast<QQuickWindow *>(roots.constFirst());
     if (auto *canvas = window == nullptr ? nullptr : window->findChild<bayan::DocumentCanvas *>(u"documentCanvas"_s)) {
       canvas->setTileSize(parser.value(tileSizeOption).toInt());
     }

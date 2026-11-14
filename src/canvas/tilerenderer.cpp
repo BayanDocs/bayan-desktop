@@ -57,12 +57,14 @@ void TileRenderer::run() {
     // Read before rendering: every request posted up to this one is handled before the tile (see Engine::lastPostedRequest).
     const qint64 renderedAfter = engine_.lastPostedRequest();
     QImage image = engine_.renderTile(job.request, job.pixels);
-    Result result{.key = job.key,
-                  .image = std::move(image),
-                  .renderedAfter = renderedAfter,
-                  .wanted = job.wanted,
-                  .started = started,
-                  .finished = Clock::now()};
+    Result result{
+        .key = job.key,
+        .image = std::move(image),
+        .renderedAfter = renderedAfter,
+        .wanted = job.wanted,
+        .started = started,
+        .finished = Clock::now(),
+    };
     // Back to the GUI thread. If the renderer is destroyed first, Qt drops the call together with its receiver.
     QMetaObject::invokeMethod(this, [this, result = std::move(result)] { emit tileRendered(result); }, Qt::QueuedConnection);
   }

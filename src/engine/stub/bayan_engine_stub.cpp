@@ -75,7 +75,7 @@ constexpr qint64 kBluPerInch = 1'828'800;
 constexpr qint64 kPageWidth = kBluPerInch * 17 / 2;
 constexpr qint64 kPageHeight = kBluPerInch * 11;
 // Tile rectangles are limited so that the integer arithmetic in renderTile cannot overflow.
-constexpr qint64 kMaxCoordinate = qint64{1} << 40;
+constexpr qint64 kMaxCoordinate = static_cast<qint64>(quint64{1} << 40U);
 constexpr qint64 kDocumentId = 1;
 
 struct Rgba {
@@ -368,10 +368,12 @@ void BayanEngine::handleMessage(qint64 id, const QString &type, const QJsonObjec
     }
     handshakeDone = true;
     reply(id, u"welcome"_s,
-          QJsonObject{{u"protocol_version"_s, kProtocolVersion},
-                      {u"engine_version"_s, engineVersion},
-                      {u"layout_epoch"_s, 0},
-                      {u"features"_s, QJsonArray{u"stub"_s}}});
+          QJsonObject{
+              {u"protocol_version"_s, kProtocolVersion},
+              {u"engine_version"_s, engineVersion},
+              {u"layout_epoch"_s, 0},
+              {u"features"_s, QJsonArray{u"stub"_s}},
+          });
     return;
   }
   if (!handshakeDone) {
@@ -394,10 +396,12 @@ void BayanEngine::handleMessage(qint64 id, const QString &type, const QJsonObjec
     }
     documentOpen = true;
     reply(id, u"doc.opened"_s,
-          QJsonObject{{u"doc_id"_s, kDocumentId},
-                      {u"page_count_estimate"_s, 1},
-                      {u"warnings"_s, QJsonArray{}},
-                      {u"fonts"_s, QJsonObject{{u"missing"_s, QJsonArray{}}, {u"machine_dependent"_s, false}}}});
+          QJsonObject{
+              {u"doc_id"_s, kDocumentId},
+              {u"page_count_estimate"_s, 1},
+              {u"warnings"_s, QJsonArray{}},
+              {u"fonts"_s, QJsonObject{{u"missing"_s, QJsonArray{}}, {u"machine_dependent"_s, false}}},
+          });
     return;
   }
   const bool knownDocument = documentOpen && payload.value(u"doc_id"_s).toInteger(0) == kDocumentId;
@@ -408,22 +412,34 @@ void BayanEngine::handleMessage(qint64 id, const QString &type, const QJsonObjec
     }
     reply(id, {}, {});
     const QJsonObject pageRect{{u"x"_s, 0}, {u"y"_s, 0}, {u"width"_s, kPageWidth}, {u"height"_s, kPageHeight}};
-    event(u"view.pages"_s,
-          QJsonObject{
-              {u"doc_id"_s, kDocumentId},
-              {u"pages"_s,
-               QJsonArray{QJsonObject{
-                   {u"index"_s, 0}, {u"width"_s, kPageWidth}, {u"height"_s, kPageHeight}, {u"section"_s, 0}, {u"x"_s, 0}, {u"y"_s, 0}}}}});
+    event(u"view.pages"_s, QJsonObject{
+                               {u"doc_id"_s, kDocumentId},
+                               {
+                                   u"pages"_s,
+                                   QJsonArray{
+                                       QJsonObject{
+                                           {u"index"_s, 0},
+                                           {u"width"_s, kPageWidth},
+                                           {u"height"_s, kPageHeight},
+                                           {u"section"_s, 0},
+                                           {u"x"_s, 0},
+                                           {u"y"_s, 0},
+                                       },
+                                   },
+                               },
+                           });
     event(u"render.invalidate"_s,
           QJsonObject{{u"doc_id"_s, kDocumentId}, {u"regions"_s, QJsonArray{QJsonObject{{u"page"_s, 0}, {u"rect"_s, pageRect}}}}});
     event(u"view.layout.progress"_s,
           QJsonObject{{u"doc_id"_s, kDocumentId}, {u"pages_laid_out"_s, 1}, {u"page_count_estimate"_s, 1}, {u"complete"_s, true}});
     // The test page has no caret and no selection.
-    event(u"overlay.update"_s, QJsonObject{{u"doc_id"_s, kDocumentId},
-                                           {u"caret"_s, QJsonValue::Null},
-                                           {u"selection"_s, QJsonArray{}},
-                                           {u"remote"_s, QJsonArray{}},
-                                           {u"highlights"_s, QJsonArray{}}});
+    event(u"overlay.update"_s, QJsonObject{
+                                   {u"doc_id"_s, kDocumentId},
+                                   {u"caret"_s, QJsonValue::Null},
+                                   {u"selection"_s, QJsonArray{}},
+                                   {u"remote"_s, QJsonArray{}},
+                                   {u"highlights"_s, QJsonArray{}},
+                               });
     return;
   }
   if (type == u"doc.close"_s) {

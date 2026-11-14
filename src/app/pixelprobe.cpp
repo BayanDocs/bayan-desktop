@@ -67,11 +67,13 @@ std::optional<QString> compareWithEnginePixels(const DocumentCanvas &canvas, con
       const qint64 left = grid.bluAt(column);
       const qint64 top = grid.bluAt(row);
       const protocol::BluRect pixel{.x = left, .y = top, .width = grid.bluAt(column + 1) - left, .height = grid.bluAt(row + 1) - top};
-      const QJsonObject request{{u"doc_id"_s, session->documentId()},
-                                {u"page"_s, target.index},
-                                {u"rect"_s, protocol::toJson(pixel)},
-                                {u"width"_s, 1},
-                                {u"height"_s, 1}};
+      const QJsonObject request{
+          {u"doc_id"_s, session->documentId()},
+          {u"page"_s, target.index},
+          {u"rect"_s, protocol::toJson(pixel)},
+          {u"width"_s, 1},
+          {u"height"_s, 1},
+      };
       const QImage expected = session->engine().renderTile(request, QSize(1, 1));
       if (expected.isNull()) {
         return u"the engine refused to render a probe pixel"_s;

@@ -367,7 +367,8 @@ void TestDocumentSession::unreadableAccessibilityUpdatesFetchTheTreeAgain() {
   QVERIFY(session.accessibilityTree());
   // A change the session cannot apply (a node that is not in the tree): it drops the tree and asks for the whole of it again.
   const QJsonObject stranger{
-      {u"id"_s, 999'999}, {u"role"_s, u"paragraph"_s}, {u"name"_s, QString()}, {u"text"_s, u"stranger"_s}, {u"children"_s, QJsonArray{}}};
+      {u"id"_s, 999'999}, {u"role"_s, u"paragraph"_s}, {u"name"_s, QString()}, {u"text"_s, u"stranger"_s}, {u"children"_s, QJsonArray{}},
+  };
   QVERIFY(deliver(
       *open->engine,
       engineEvent(u"a11y.update"_s, QJsonObject{{u"doc_id"_s, session.documentId()},
@@ -425,9 +426,11 @@ void TestDocumentSession::onlyUnrecoverableEngineErrorsRestartTheSession() {
   bayan::Engine &engine = *open->engine;
   bayan::DocumentSession &session = *open->session;
   QSignalSpy closed(&session, &bayan::DocumentSession::documentClosed);
-  const QJsonObject hostile{{u"code"_s, u"internal"_s},
-                            {u"message_id"_s, u"engine-error-<img src=x>"_s},
-                            {u"args"_s, QJsonObject{{u"type"_s, u"<b>marker</b>"_s}}}};
+  const QJsonObject hostile{
+      {u"code"_s, u"internal"_s},
+      {u"message_id"_s, u"engine-error-<img src=x>"_s},
+      {u"args"_s, QJsonObject{{u"type"_s, u"<b>marker</b>"_s}}},
+  };
   QJsonObject recoverable = hostile;
   recoverable.insert(u"recoverable"_s, true);
   QVERIFY(deliver(engine, engineEvent(u"engine.error"_s, recoverable)));
@@ -566,10 +569,12 @@ void TestDocumentSession::aFailureBeforeTheDocumentWasEverOpenOffersToOpenIt() {
                      if (!failed) {
                        failed = true;
                        emitted = emitEvent(*engine, u"engine.error"_s,
-                                           QJsonObject{{u"code"_s, u"panic"_s},
-                                                       {u"message_id"_s, u"engine-error-panic"_s},
-                                                       {u"recoverable"_s, false},
-                                                       {u"args"_s, QJsonObject{}}});
+                                           QJsonObject{
+                                               {u"code"_s, u"panic"_s},
+                                               {u"message_id"_s, u"engine-error-panic"_s},
+                                               {u"recoverable"_s, false},
+                                               {u"args"_s, QJsonObject{}},
+                                           });
                      }
                    });
   const ReplyLog replies(*engine);

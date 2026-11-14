@@ -15,7 +15,7 @@ namespace bayan::protocol {
 namespace {
 
 // The largest integer a JSON number carries exactly in every language the engine talks to (engine protocol §4).
-constexpr qint64 kMaxExactInteger = (qint64{1} << 53) - 1;
+constexpr qint64 kMaxExactInteger = static_cast<qint64>(quint64{1} << 53U) - 1;
 // The most selection rectangles an overlay may carry.
 constexpr qsizetype kMaxSelectionRects = 100'000;
 
@@ -454,21 +454,22 @@ QJsonObject toJson(const BluRect &rect) {
 }
 
 QJsonObject keyPayload(const KeyInput &key) {
-  return QJsonObject{{u"key"_s, key.key},
-                     {u"code"_s, key.code},
-                     {u"modifiers"_s, toJson(key.modifiers)},
-                     {u"repeat"_s, key.repeat},
-                     {u"composing"_s, key.composing}};
+  return QJsonObject{
+      {u"key"_s, key.key},       {u"code"_s, key.code},           {u"modifiers"_s, toJson(key.modifiers)},
+      {u"repeat"_s, key.repeat}, {u"composing"_s, key.composing},
+  };
 }
 
 QJsonObject pointerPayload(const PointerInput &pointer) {
-  return QJsonObject{{u"kind"_s, pointerKindName(pointer.kind)},
-                     {u"x"_s, pointer.position.x()},
-                     {u"y"_s, pointer.position.y()},
-                     {u"button"_s, pointer.button},
-                     {u"clicks"_s, pointer.clicks},
-                     {u"modifiers"_s, toJson(pointer.modifiers)},
-                     {u"pointer_type"_s, pointerTypeName(pointer.pointerType)}};
+  return QJsonObject{
+      {u"kind"_s, pointerKindName(pointer.kind)},
+      {u"x"_s, pointer.position.x()},
+      {u"y"_s, pointer.position.y()},
+      {u"button"_s, pointer.button},
+      {u"clicks"_s, pointer.clicks},
+      {u"modifiers"_s, toJson(pointer.modifiers)},
+      {u"pointer_type"_s, pointerTypeName(pointer.pointerType)},
+  };
 }
 
 QJsonObject compositionPayload(CompositionPhase phase, const QString &text, int selectionStart, int selectionEnd) {
