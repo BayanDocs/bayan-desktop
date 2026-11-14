@@ -22,7 +22,11 @@ QJsonObject engineEvent(const QString &type, const QJsonObject &payload) {
 // engine.error as bayan-core's engine sends it after a panic (engine protocol §12).
 QJsonObject panicError() {
   return QJsonObject{
-      {u"code"_s, u"panic"_s}, {u"message_id"_s, u"engine-error-panic"_s}, {u"recoverable"_s, false}, {u"args"_s, QJsonObject{}}};
+      {u"code"_s, u"panic"_s},
+      {u"message_id"_s, u"engine-error-panic"_s},
+      {u"recoverable"_s, false},
+      {u"args"_s, QJsonObject{}},
+  };
 }
 
 // Whether one of the problems starts with this place and contains this text.
@@ -81,21 +85,35 @@ void TestProtocolSchema::loadsTheEngineProtocolSchema() {
 
 void TestProtocolSchema::acceptsTheEnginesMessages() {
   QCOMPARE(schema().problemsOfMessageFromEngine(engineEvent(u"engine.error"_s, panicError())), QStringList());
-  const QJsonObject welcome{{u"v"_s, 0},
-                            {u"re"_s, 1},
-                            {u"ok"_s, true},
-                            {u"type"_s, u"welcome"_s},
-                            {u"payload"_s, QJsonObject{{u"protocol_version"_s, 0},
-                                                       {u"engine_version"_s, u"0.1.0"_s},
-                                                       {u"layout_epoch"_s, 0},
-                                                       {u"features"_s, QJsonArray{u"mock_document"_s}}}}};
+  const QJsonObject welcome{
+      {u"v"_s, 0},
+      {u"re"_s, 1},
+      {u"ok"_s, true},
+      {u"type"_s, u"welcome"_s},
+      {
+          u"payload"_s,
+          QJsonObject{
+              {u"protocol_version"_s, 0},
+              {u"engine_version"_s, u"0.1.0"_s},
+              {u"layout_epoch"_s, 0},
+              {u"features"_s, QJsonArray{u"mock_document"_s}},
+          },
+      },
+  };
   QCOMPARE(schema().problemsOfMessageFromEngine(welcome, u"hello"_s), QStringList());
-  const QJsonObject refused{{u"v"_s, 0},
-                            {u"re"_s, 2},
-                            {u"ok"_s, false},
-                            {u"error"_s, QJsonObject{{u"code"_s, u"unsupported_message"_s},
-                                                     {u"message_id"_s, u"engine-error-unsupported-message"_s},
-                                                     {u"args"_s, QJsonObject{{u"type"_s, u"no.such.message"_s}}}}}};
+  const QJsonObject refused{
+      {u"v"_s, 0},
+      {u"re"_s, 2},
+      {u"ok"_s, false},
+      {
+          u"error"_s,
+          QJsonObject{
+              {u"code"_s, u"unsupported_message"_s},
+              {u"message_id"_s, u"engine-error-unsupported-message"_s},
+              {u"args"_s, QJsonObject{{u"type"_s, u"no.such.message"_s}}},
+          },
+      },
+  };
   QCOMPARE(schema().problemsOfMessageFromEngine(refused), QStringList());
   const QJsonObject page{{u"index"_s, 0}, {u"width"_s, 15'544'800}, {u"height"_s, 20'116'800}, {u"section"_s, 0}, {u"x"_s, 0}, {u"y"_s, 0}};
   QCOMPARE(
@@ -111,7 +129,8 @@ void TestProtocolSchema::rejectsEngineErrorWithANestedError() {
   // The shape that tst_documentsession built by hand before DESK-003: the fields of the error nested under "error", as in a failed reply.
   const QJsonObject nested{
       {u"error"_s, QJsonObject{{u"code"_s, u"internal"_s}, {u"message_id"_s, u"engine-error-internal"_s}, {u"args"_s, QJsonObject{}}}},
-      {u"recoverable"_s, false}};
+      {u"recoverable"_s, false},
+  };
   const QStringList problems = schema().problemsOfMessageFromEngine(engineEvent(u"engine.error"_s, nested));
   QVERIFY2(!problems.isEmpty(), "the nested error was accepted");
   for (const QString &field : {u"code"_s, u"message_id"_s, u"args"_s}) {
@@ -147,10 +166,12 @@ void TestProtocolSchema::rejectsAnUnknownFieldWhereTheSchemaForbidsOne() {
 
   // Where a schema forbids unknown fields altogether (additionalProperties: false), the checker refuses them.
   QStringList loading;
-  const auto closed = ProtocolSchema::load(QJsonDocument(QJsonObject{{u"$schema"_s, u"https://json-schema.org/draft/2020-12/schema"_s},
-                                                                     {u"type"_s, u"object"_s},
-                                                                     {u"properties"_s, QJsonObject{{u"known"_s, QJsonObject{}}}},
-                                                                     {u"additionalProperties"_s, false}})
+  const auto closed = ProtocolSchema::load(QJsonDocument(QJsonObject{
+                                                             {u"$schema"_s, u"https://json-schema.org/draft/2020-12/schema"_s},
+                                                             {u"type"_s, u"object"_s},
+                                                             {u"properties"_s, QJsonObject{{u"known"_s, QJsonObject{}}}},
+                                                             {u"additionalProperties"_s, false},
+                                                         })
                                                .toJson(),
                                            loading);
   if (!closed) {
@@ -164,7 +185,11 @@ void TestProtocolSchema::rejectsAnUnknownFieldWhereTheSchemaForbidsOne() {
 void TestProtocolSchema::rejectsWhatTheEngineNeverSends() {
   // A request is a message to the engine, never from it.
   const QJsonObject hello{
-      {u"v"_s, 0}, {u"id"_s, 1}, {u"type"_s, u"hello"_s}, {u"payload"_s, QJsonObject{{u"protocol_versions"_s, QJsonArray{0}}}}};
+      {u"v"_s, 0},
+      {u"id"_s, 1},
+      {u"type"_s, u"hello"_s},
+      {u"payload"_s, QJsonObject{{u"protocol_versions"_s, QJsonArray{0}}}},
+  };
   QVERIFY(!schema().problemsOfMessageFromEngine(hello).isEmpty());
   // An event type that protocol v0 does not have (diag.log is planned, not defined).
   QVERIFY(!schema().problemsOfMessageFromEngine(engineEvent(u"diag.log"_s, QJsonObject{{u"level"_s, u"info"_s}})).isEmpty());
@@ -203,14 +228,18 @@ void TestProtocolSchema::checksTheTypeOfEachReply() {
     }
     return message;
   };
-  const QJsonObject welcome{{u"protocol_version"_s, 0},
-                            {u"engine_version"_s, u"0.1.0"_s},
-                            {u"layout_epoch"_s, 0},
-                            {u"features"_s, QJsonArray{u"mock_document"_s}}};
-  const QJsonObject opened{{u"doc_id"_s, 1},
-                           {u"page_count_estimate"_s, 1},
-                           {u"warnings"_s, QJsonArray{}},
-                           {u"fonts"_s, QJsonObject{{u"missing"_s, QJsonArray{}}, {u"machine_dependent"_s, false}}}};
+  const QJsonObject welcome{
+      {u"protocol_version"_s, 0},
+      {u"engine_version"_s, u"0.1.0"_s},
+      {u"layout_epoch"_s, 0},
+      {u"features"_s, QJsonArray{u"mock_document"_s}},
+  };
+  const QJsonObject opened{
+      {u"doc_id"_s, 1},
+      {u"page_count_estimate"_s, 1},
+      {u"warnings"_s, QJsonArray{}},
+      {u"fonts"_s, QJsonObject{{u"missing"_s, QJsonArray{}}, {u"machine_dependent"_s, false}}},
+  };
   QCOMPARE(schema().problemsOfMessageFromEngine(reply(welcome, u"welcome"_s), u"hello"_s), QStringList());
   QCOMPARE(schema().problemsOfMessageFromEngine(reply(opened, u"doc.opened"_s), u"doc.open"_s), QStringList());
   QCOMPARE(schema().problemsOfMessageFromEngine(reply(QJsonObject{}, QJsonValue::Undefined), u"view.set"_s), QStringList());
@@ -263,29 +292,55 @@ void TestProtocolSchema::numbersFollowTheirRustTypes() {
   QVERIFY(mentions(schema().problemsOfMessageFromEngine(progress(2.5)), u"/payload/pages_laid_out"_s, u"not of type \"integer\""_s));
   QVERIFY(mentions(schema().problemsOfMessageFromEngine(progress(-1)), u"/payload/pages_laid_out"_s, u"below the minimum 0"_s));
   // pages_laid_out is a u32 in the engine: 2^32 does not fit, although the schema gives no maximum.
-  QVERIFY(mentions(schema().problemsOfMessageFromEngine(progress(qint64{1} << 32)), u"/payload/pages_laid_out"_s, u"format uint32"_s));
+  QVERIFY(mentions(schema().problemsOfMessageFromEngine(progress(static_cast<qint64>(quint64{1} << 32U))), u"/payload/pages_laid_out"_s,
+                   u"format uint32"_s));
   QCOMPARE(schema().problemsOfMessageFromEngine(progress(qint64{0xFFFF'FFFF})), QStringList());
   // seq stays below 2^53, so that JavaScript numbers hold it exactly.
   QJsonObject late = progress(3);
-  late.insert(u"seq"_s, qint64{1} << 53);
+  late.insert(u"seq"_s, static_cast<qint64>(quint64{1} << 53U));
   QVERIFY(mentions(schema().problemsOfMessageFromEngine(late), u"/seq"_s, u"above the maximum 9007199254740991"_s));
-  late.insert(u"seq"_s, (qint64{1} << 53) - 1);
+  late.insert(u"seq"_s, static_cast<qint64>(quint64{1} << 53U) - 1);
   QCOMPARE(schema().problemsOfMessageFromEngine(late), QStringList());
 }
 
 void TestProtocolSchema::alternativesAndBooleanSchemas() {
   QStringList loading;
-  const auto alternatives = ProtocolSchema::load(
-      QJsonDocument(
-          QJsonObject{{u"$schema"_s, u"https://json-schema.org/draft/2020-12/schema"_s},
-                      {u"$defs"_s, QJsonObject{{u"One"_s, QJsonObject{{u"oneOf"_s, QJsonArray{QJsonObject{{u"type"_s, u"integer"_s}},
-                                                                                              QJsonObject{{u"type"_s, u"number"_s}}}}}},
-                                               {u"Any"_s, QJsonObject{{u"anyOf"_s, QJsonArray{QJsonObject{{u"type"_s, u"integer"_s}},
-                                                                                              QJsonObject{{u"type"_s, u"number"_s}}}}}},
-                                               {u"Everything"_s, QJsonObject{{u"items"_s, true}}},
-                                               {u"Nothing"_s, QJsonObject{{u"items"_s, false}}}}}})
-          .toJson(),
-      loading);
+  const auto alternatives = ProtocolSchema::load(QJsonDocument(QJsonObject{
+                                                                   {u"$schema"_s, u"https://json-schema.org/draft/2020-12/schema"_s},
+                                                                   {
+                                                                       u"$defs"_s,
+                                                                       QJsonObject{
+                                                                           {
+                                                                               u"One"_s,
+                                                                               QJsonObject{
+                                                                                   {
+                                                                                       u"oneOf"_s,
+                                                                                       QJsonArray{
+                                                                                           QJsonObject{{u"type"_s, u"integer"_s}},
+                                                                                           QJsonObject{{u"type"_s, u"number"_s}},
+                                                                                       },
+                                                                                   },
+                                                                               },
+                                                                           },
+                                                                           {
+                                                                               u"Any"_s,
+                                                                               QJsonObject{
+                                                                                   {
+                                                                                       u"anyOf"_s,
+                                                                                       QJsonArray{
+                                                                                           QJsonObject{{u"type"_s, u"integer"_s}},
+                                                                                           QJsonObject{{u"type"_s, u"number"_s}},
+                                                                                       },
+                                                                                   },
+                                                                               },
+                                                                           },
+                                                                           {u"Everything"_s, QJsonObject{{u"items"_s, true}}},
+                                                                           {u"Nothing"_s, QJsonObject{{u"items"_s, false}}},
+                                                                       },
+                                                                   },
+                                                               })
+                                                     .toJson(),
+                                                 loading);
   if (!alternatives) {
     QFAIL(qPrintable(loading.join(u'\n')));
   }
@@ -332,7 +387,11 @@ void TestProtocolSchema::refusesASchemaWithAKeywordItDoesNotImplement() {
   QVERIFY(!loadProblems(QJsonObject{{u"items"_s, QJsonArray{QJsonObject{}}}}).isEmpty());
   // The protocol's own list of messages is read strictly too.
   const QJsonObject unknownField{
-      {u"direction"_s, u"to_shell"_s}, {u"type"_s, u"view.pages"_s}, {u"payload"_s, u"#/$defs/Thing"_s}, {u"reply_events"_s, QJsonArray{}}};
+      {u"direction"_s, u"to_shell"_s},
+      {u"type"_s, u"view.pages"_s},
+      {u"payload"_s, u"#/$defs/Thing"_s},
+      {u"reply_events"_s, QJsonArray{}},
+  };
   QVERIFY(mentions(
       loadProblems(QJsonObject{{u"$defs"_s, QJsonObject{{u"Thing"_s, QJsonObject{}}}}, {u"x-bayan-messages"_s, QJsonArray{unknownField}}}),
       u"#/x-bayan-messages (view.pages)"_s, u"reply_events"_s));

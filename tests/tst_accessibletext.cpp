@@ -31,19 +31,28 @@ protocol::AccessibleTree sampleTree() {
   QJsonArray chars;
   const std::array<std::pair<qint64, qint64>, 5> boxes{{{100, 20}, {120, 10}, {130, 8}, {138, 8}, {146, 9}}};
   for (std::size_t i = 0; i < boxes.size(); ++i) {
-    chars.append(QJsonObject{{u"start"_s, static_cast<int>(i)},
-                             {u"end"_s, static_cast<int>(i) + 1},
-                             {u"rect"_s, rect(boxes.at(i).first, 200, boxes.at(i).second, 50)}});
+    chars.append(QJsonObject{
+        {u"start"_s, static_cast<int>(i)},
+        {u"end"_s, static_cast<int>(i) + 1},
+        {u"rect"_s, rect(boxes.at(i).first, 200, boxes.at(i).second, 50)},
+    });
   }
   heading.insert(u"chars"_s, chars);
   const QJsonObject row{
-      {u"id"_s, 4}, {u"role"_s, u"row"_s}, {u"children"_s, QJsonArray{textNode(5, u"cell"_s, u"A"_s), textNode(6, u"cell"_s, u"B"_s)}}};
+      {u"id"_s, 4},
+      {u"role"_s, u"row"_s},
+      {u"children"_s, QJsonArray{textNode(5, u"cell"_s, u"A"_s), textNode(6, u"cell"_s, u"B"_s)}},
+  };
   const QJsonObject table{{u"id"_s, 3}, {u"role"_s, u"table"_s}, {u"children"_s, QJsonArray{row}}};
   QJsonObject line = textNode(7, u"paragraph"_s, QString());
   line.insert(u"editable"_s, true);
   line.insert(u"bounds"_s, QJsonObject{{u"page"_s, 1}, {u"rect"_s, rect(0, 1000, 4000, 300)}});
   const QJsonObject root{
-      {u"id"_s, 1}, {u"role"_s, u"document"_s}, {u"name"_s, u"Sample"_s}, {u"children"_s, QJsonArray{heading, table, line}}};
+      {u"id"_s, 1},
+      {u"role"_s, u"document"_s},
+      {u"name"_s, u"Sample"_s},
+      {u"children"_s, QJsonArray{heading, table, line}},
+  };
   auto tree = protocol::parseAccessibleTree(root, 2);
   if (!tree) {
     qFatal("the sample tree was refused");

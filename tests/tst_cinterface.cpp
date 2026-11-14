@@ -45,12 +45,14 @@ QByteArray compact(const QJsonObject &object) { return QJsonDocument(object).toJ
 // A render.tile request for the top-left square inch of the first page of document 1, the first document an engine opens.
 QJsonObject tileRequest() {
   constexpr qint64 kInch = 1'828'800;
-  return QJsonObject{{u"doc_id"_s, 1},
-                     {u"page"_s, 0},
-                     {u"rect"_s, QJsonObject{{u"x"_s, 0}, {u"y"_s, 0}, {u"width"_s, kInch}, {u"height"_s, kInch}}},
-                     {u"zoom"_s, 1.0},
-                     {u"device_scale"_s, 1.0},
-                     {u"mode"_s, u"interactive"_s}};
+  return QJsonObject{
+      {u"doc_id"_s, 1},
+      {u"page"_s, 0},
+      {u"rect"_s, QJsonObject{{u"x"_s, 0}, {u"y"_s, 0}, {u"width"_s, kInch}, {u"height"_s, kInch}}},
+      {u"zoom"_s, 1.0},
+      {u"device_scale"_s, 1.0},
+      {u"mode"_s, u"interactive"_s},
+  };
 }
 
 // Renders the tile of tileRequest(), 8 × 8 pixels, and returns the status.
@@ -417,32 +419,44 @@ void TestCInterface::everyMessageOfTheEngineMatchesTheSchema() {
       }
     }
   }
-  QSet<QString> expected{u"hello"_s,
-                         u"doc.open"_s,
-                         u"view.set"_s,
-                         u"doc.close"_s,
-                         u"view.pages"_s,
-                         u"render.invalidate"_s,
-                         u"view.layout.progress"_s,
-                         u"overlay.update"_s,
-                         u"error unsupported_protocol_version"_s,
-                         u"error handshake_required"_s,
-                         u"error not_found"_s,
-                         u"error unsupported_message"_s,
-                         u"error not_allowed"_s,
-                         u"error panic"_s,
-                         u"engine.error invalid_message"_s,
-                         u"engine.error unsupported_message"_s,
-                         u"engine.error panic"_s};
+  QSet<QString> expected{
+      u"hello"_s,
+      u"doc.open"_s,
+      u"view.set"_s,
+      u"doc.close"_s,
+      u"view.pages"_s,
+      u"render.invalidate"_s,
+      u"view.layout.progress"_s,
+      u"overlay.update"_s,
+      u"error unsupported_protocol_version"_s,
+      u"error handshake_required"_s,
+      u"error not_found"_s,
+      u"error unsupported_message"_s,
+      u"error not_allowed"_s,
+      u"error panic"_s,
+      u"engine.error invalid_message"_s,
+      u"engine.error unsupported_message"_s,
+      u"engine.error panic"_s,
+  };
   if (isStub()) {
     QVERIFY2(!mockDocumentRequired(), "the engine has no mock document");
     expected.insert(u"error limit_exceeded"_s);
   } else {
     // The real engine implements what the stub refuses: the mock document's accessibility tree and input, the UI manifest, tiles through
     // messages, recordings and replays.
-    expected.unite(QSet<QString>{u"query.a11y"_s, u"a11y.update"_s, u"input.text"_s, u"input.key"_s, u"input.composition"_s,
-                                 u"input.pointer"_s, u"ui.manifest"_s, u"render.tile"_s, u"diag.record.start"_s, u"diag.record.stop"_s,
-                                 u"diag.replay"_s});
+    expected.unite(QSet<QString>{
+        u"query.a11y"_s,
+        u"a11y.update"_s,
+        u"input.text"_s,
+        u"input.key"_s,
+        u"input.composition"_s,
+        u"input.pointer"_s,
+        u"ui.manifest"_s,
+        u"render.tile"_s,
+        u"diag.record.start"_s,
+        u"diag.record.stop"_s,
+        u"diag.replay"_s,
+    });
   }
   const QSet<QString> missing = expected - kinds;
   QVERIFY2(missing.isEmpty(), qPrintable(u"no message of these kinds: "_s + QStringList(missing.cbegin(), missing.cend()).join(u", "_s)));

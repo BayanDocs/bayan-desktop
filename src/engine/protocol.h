@@ -25,9 +25,9 @@ namespace bayan::protocol {
 // A device-independent pixel is 1/96 inch, and an inch is 1,828,800 BLU (ADR-0005, engine protocol §7).
 inline constexpr qint64 kBluPerDip = 19'050;
 // The largest coordinate the shell accepts in geometry from the engine: the engine keeps tile rectangles within ±2^40 BLU (§13).
-inline constexpr qint64 kMaxCoordinate = qint64{1} << 40;
+inline constexpr qint64 kMaxCoordinate = static_cast<qint64>(quint64{1} << 40U);
 // Page sizes larger than this (about 140 metres) are treated as a broken message rather than displayed.
-inline constexpr qint64 kMaxPageSide = qint64{1} << 38;
+inline constexpr qint64 kMaxPageSide = static_cast<qint64>(quint64{1} << 38U);
 // The most pages a document may announce; more is treated as a broken message.
 inline constexpr int kMaxPages = 1'000'000;
 

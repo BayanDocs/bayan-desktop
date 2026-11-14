@@ -397,9 +397,11 @@ bool check(const Definitions &definitions, const QJsonValue &schema, const QJson
           {.pointer = pointer, .text = u"matches %1 of the alternatives of oneOf, where exactly one must match"_s.arg(matches)});
       continue;
     }
-    problems.append({.pointer = pointer,
-                     .text = u"matches none of the %1 alternatives of %2; the closest one says:"_s.arg(alternatives.size()).arg(keyword),
-                     .listsAlternatives = true});
+    problems.append({
+        .pointer = pointer,
+        .text = u"matches none of the %1 alternatives of %2; the closest one says:"_s.arg(alternatives.size()).arg(keyword),
+        .listsAlternatives = true,
+    });
     for (Problem problem : closest.value_or(Problems())) {
       ++problem.indent;
       problems.append(std::move(problem));
@@ -419,8 +421,15 @@ struct ReplyOf {
 // The problems of a message from the engine (ProtocolSchema::problemsOfMessageFromEngine()); a successful reply is checked as reply says.
 Problems messageProblems(const Definitions &definitions, const QJsonObject &message, const ReplyOf &reply) {
   // The engine sends replies and events, exactly one of the two in each message, and never a request.
-  const QJsonObject fromEngine{{u"oneOf"_s, QJsonArray{QJsonObject{{u"$ref"_s, QString(kDefinitionsPrefix.toString() + u"Reply"_s)}},
-                                                       QJsonObject{{u"$ref"_s, QString(kDefinitionsPrefix.toString() + u"Event"_s)}}}}};
+  const QJsonObject fromEngine{
+      {
+          u"oneOf"_s,
+          QJsonArray{
+              QJsonObject{{u"$ref"_s, QString(kDefinitionsPrefix.toString() + u"Reply"_s)}},
+              QJsonObject{{u"$ref"_s, QString(kDefinitionsPrefix.toString() + u"Event"_s)}},
+          },
+      },
+  };
   if (!definitions.contains(u"Reply"_s) || !definitions.contains(u"Event"_s)) {
     return {{.pointer = {}, .text = u"the schema defines no Reply or no Event"_s}};
   }
@@ -431,11 +440,13 @@ Problems messageProblems(const Definitions &definitions, const QJsonObject &mess
   // A successful reply must be the reply to its request.
   if (reply.requestType.isEmpty()) {
     return {
-        {.pointer = {}, .text = u"a successful reply: the test must say which type of request it answers, so that it can be checked"_s}};
+        {.pointer = {}, .text = u"a successful reply: the test must say which type of request it answers, so that it can be checked"_s},
+    };
   }
   if (reply.definition.isEmpty()) {
     return {
-        {.pointer = {}, .text = u"a successful reply to %1, which has no reply in the schema's x-bayan-messages"_s.arg(reply.requestType)}};
+        {.pointer = {}, .text = u"a successful reply to %1, which has no reply in the schema's x-bayan-messages"_s.arg(reply.requestType)},
+    };
   }
   // Its type is the reply_type of the request's entry, or none, as the engine sends it. Reply's own check has made sure that a type is a
   // string.
@@ -443,12 +454,16 @@ Problems messageProblems(const Definitions &definitions, const QJsonObject &mess
   if (reply.type.isEmpty() && !type.isUndefined()) {
     found.append({.pointer = u"/type"_s, .text = u"is %1, but a reply to %2 has no type"_s.arg(compact(type), reply.requestType)});
   } else if (!reply.type.isEmpty() && type.isUndefined()) {
-    found.append({.pointer = {},
-                  .text = u"lacks the field type, which is \"%1\" in a reply to %2"_s.arg(reply.type, reply.requestType),
-                  .missingField = u"type"_s});
+    found.append({
+        .pointer = {},
+        .text = u"lacks the field type, which is \"%1\" in a reply to %2"_s.arg(reply.type, reply.requestType),
+        .missingField = u"type"_s,
+    });
   } else if (!reply.type.isEmpty() && type != QJsonValue(reply.type)) {
-    found.append({.pointer = u"/type"_s,
-                  .text = u"is %1, not \"%2\", the type of a reply to %3"_s.arg(compact(type), reply.type, reply.requestType)});
+    found.append({
+        .pointer = u"/type"_s,
+        .text = u"is %1, not \"%2\", the type of a reply to %3"_s.arg(compact(type), reply.type, reply.requestType),
+    });
   }
   check(definitions, definitions.value(reply.definition), message.value(u"payload"_s), u"/payload"_s, 1, found);
   return found;

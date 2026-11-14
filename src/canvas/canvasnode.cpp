@@ -11,7 +11,7 @@ namespace bayan {
 namespace {
 
 // Makes a layer hold exactly count rectangle nodes, creating or deleting nodes at its end, and returns them.
-std::vector<QSGRectangleNode *> rectangleNodes(QQuickWindow &window, QSGNode &layer, std::size_t count) {
+std::vector<QSGRectangleNode *> rectangleNodes(const QQuickWindow &window, QSGNode &layer, std::size_t count) {
   std::vector<QSGRectangleNode *> nodes;
   for (QSGNode *child = layer.firstChild(); child != nullptr; child = child->nextSibling()) {
     nodes.push_back(static_cast<QSGRectangleNode *>(child)); // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast): only these here.

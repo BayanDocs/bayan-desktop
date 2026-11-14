@@ -159,10 +159,12 @@ KeyMappingOptions KeyMappingOptions::forPlatform() {
 protocol::Modifiers domModifiers(Qt::KeyboardModifiers modifiers, const KeyMappingOptions &options) {
   const bool control = modifiers.testFlag(Qt::ControlModifier);
   const bool meta = modifiers.testFlag(Qt::MetaModifier);
-  return {.shift = modifiers.testFlag(Qt::ShiftModifier),
-          .ctrl = options.commandIsControl ? meta : control,
-          .alt = modifiers.testFlag(Qt::AltModifier),
-          .meta = options.commandIsControl ? control : meta};
+  return {
+      .shift = modifiers.testFlag(Qt::ShiftModifier),
+      .ctrl = options.commandIsControl ? meta : control,
+      .alt = modifiers.testFlag(Qt::AltModifier),
+      .meta = options.commandIsControl ? control : meta,
+  };
 }
 
 QString domKey(const QKeyEvent &event, const KeyMappingOptions &options) {
@@ -217,11 +219,13 @@ QString domCode(const QKeyEvent &event) {
 }
 
 protocol::KeyInput keyInput(const QKeyEvent &event, bool composing, const KeyMappingOptions &options) {
-  return {.key = domKey(event, options),
-          .code = domCode(event),
-          .modifiers = domModifiers(event.modifiers(), options),
-          .repeat = event.isAutoRepeat(),
-          .composing = composing};
+  return {
+      .key = domKey(event, options),
+      .code = domCode(event),
+      .modifiers = domModifiers(event.modifiers(), options),
+      .repeat = event.isAutoRepeat(),
+      .composing = composing,
+  };
 }
 
 std::optional<QString> typedText(const QKeyEvent &event, const KeyMappingOptions &options) {

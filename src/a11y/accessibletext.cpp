@@ -17,13 +17,15 @@ AccessibleText::AccessibleText(const protocol::AccessibleTree &tree) : name_(tre
       // One node per line: the bridges and the screen readers find lines and paragraphs by their line breaks.
       text_.append(u'\n');
     }
-    segments_.push_back(Segment{.node = node->id,
-                                .role = node->role,
-                                .start = static_cast<int>(text_.size()),
-                                .length = static_cast<int>(node->text.size()),
-                                .editable = node->editable,
-                                .bounds = node->bounds,
-                                .chars = node->chars});
+    segments_.push_back(Segment{
+        .node = node->id,
+        .role = node->role,
+        .start = static_cast<int>(text_.size()),
+        .length = static_cast<int>(node->text.size()),
+        .editable = node->editable,
+        .bounds = node->bounds,
+        .chars = node->chars,
+    });
     text_.append(node->text);
   }
 }
@@ -91,9 +93,11 @@ AccessibleText::Change AccessibleText::difference(const QString &before, const Q
   if (suffix > 0 && before.size() - suffix > prefix && before.at(before.size() - suffix).isLowSurrogate()) {
     --suffix;
   }
-  return {.position = static_cast<int>(prefix),
-          .removed = before.mid(prefix, before.size() - prefix - suffix),
-          .inserted = after.mid(prefix, after.size() - prefix - suffix)};
+  return {
+      .position = static_cast<int>(prefix),
+      .removed = before.mid(prefix, before.size() - prefix - suffix),
+      .inserted = after.mid(prefix, after.size() - prefix - suffix),
+  };
 }
 
 } // namespace bayan

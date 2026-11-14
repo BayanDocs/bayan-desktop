@@ -1,7 +1,7 @@
 # bayan-desktop: the Qt Quick desktop shell of BayanDocs (ADR-0013).
 # Build with the presets in CMakePresets.json; `cmake --workflow --preset verify` is the full verification gate (see AGENTS.md).
 
-# 3.25 is required by Qt 6.12 and by workflow presets; CI and scripts/dev-setup.sh use the pinned CMake 4.4.3.
+# 3.25 is required by Qt 6.12 and by workflow presets; CI and scripts/dev-setup.sh use the pinned CMake 4.4.4.
 cmake_minimum_required(VERSION 3.25...4.4)
 
 project(BayanDesktop

@@ -183,11 +183,13 @@ void DocumentCanvas::startRenderer() {
 ViewGeometry DocumentCanvas::geometry() const {
   static const std::vector<protocol::Page> noPages;
   const QPointF sceneOffset = window() != nullptr ? mapToScene(QPointF(0, 0)) : QPointF();
-  return ViewGeometry(session_ != nullptr ? session_->pages() : noPages, ViewState{.zoom = zoom_,
-                                                                                   .devicePixelRatio = devicePixelRatio_,
-                                                                                   .viewportSize = size(),
-                                                                                   .contentPosition = contentPosition_,
-                                                                                   .sceneOffset = sceneOffset});
+  return ViewGeometry(session_ != nullptr ? session_->pages() : noPages, ViewState{
+                                                                             .zoom = zoom_,
+                                                                             .devicePixelRatio = devicePixelRatio_,
+                                                                             .viewportSize = size(),
+                                                                             .contentPosition = contentPosition_,
+                                                                             .sceneOffset = sceneOffset,
+                                                                         });
 }
 
 void DocumentCanvas::setContentPosition(QPointF position) {
@@ -604,20 +606,22 @@ void DocumentCanvas::updatePolish() {
   const double prefetch = height() * kPrefetchShare;
   const QRectF visibleArea(0, 0, width(), height());
   const TileGrid grid(tileZoom_ * devicePixelRatio_, tileSize_);
-  FramePlan plan{.view = geometry(),
-                 .grid = grid,
-                 .prefetch = prefetch,
-                 .visibleArea = visibleArea,
-                 .wantedArea = visibleArea.adjusted(-prefetch, -prefetch, prefetch, prefetch),
-                 .otherScales = standInScales(grid.scale()),
-                 .now = Clock::now(),
-                 .visibleJobs = {},
-                 .prefetchJobs = {},
-                 .standIns = {},
-                 .visible = {},
-                 .complete = tileZoom_ == zoom_,
-                 .stretched = false,
-                 .holes = false};
+  FramePlan plan{
+      .view = geometry(),
+      .grid = grid,
+      .prefetch = prefetch,
+      .visibleArea = visibleArea,
+      .wantedArea = visibleArea.adjusted(-prefetch, -prefetch, prefetch, prefetch),
+      .otherScales = standInScales(grid.scale()),
+      .now = Clock::now(),
+      .visibleJobs = {},
+      .prefetchJobs = {},
+      .standIns = {},
+      .visible = {},
+      .complete = tileZoom_ == zoom_,
+      .stretched = false,
+      .holes = false,
+  };
   for (const protocol::Page &page : session_->pages()) {
     planPage(page, plan);
   }
@@ -688,12 +692,14 @@ void DocumentCanvas::planTile(const protocol::Page &page, const TileKey &key, bo
     visibleSince_.try_emplace(key, plan.now);
   }
   if (entry != nullptr && !entry->image.isNull()) {
-    displayTiles_.push_back({.key = key,
-                             .rect = plan.view.tileItemRect(page, plan.grid, key.column, key.row),
-                             .image = entry->image,
-                             .version = entry->version,
-                             .current = true,
-                             .exact = plan.grid.scale() == plan.view.scale()});
+    displayTiles_.push_back({
+        .key = key,
+        .rect = plan.view.tileItemRect(page, plan.grid, key.column, key.row),
+        .image = entry->image,
+        .version = entry->version,
+        .current = true,
+        .exact = plan.grid.scale() == plan.view.scale(),
+    });
     plan.complete = plan.complete && !entry->dirty;
     return;
   }
@@ -707,17 +713,22 @@ void DocumentCanvas::planTile(const protocol::Page &page, const TileKey &key, bo
 
 TileRenderer::Job DocumentCanvas::renderJob(const protocol::Page &page, const TileGrid &grid, const TileKey &key, Clock::time_point now) {
   const DeviceRect pixels = grid.tilePixels(page, key.column, key.row);
-  return {.key = key,
-          .request = QJsonObject{{u"doc_id"_s, session_->documentId()},
-                                 {u"page"_s, page.index},
-                                 {u"rect"_s, protocol::toJson(grid.tileRect(page, key.column, key.row))},
-                                 {u"width"_s, pixels.width},
-                                 {u"height"_s, pixels.height},
-                                 {u"zoom"_s, tileZoom_},
-                                 {u"device_scale"_s, devicePixelRatio_},
-                                 {u"mode"_s, u"interactive"_s}},
-          .pixels = QSize(static_cast<int>(pixels.width), static_cast<int>(pixels.height)),
-          .wanted = wantedSince_.try_emplace(key, now).first->second};
+  return {
+      .key = key,
+      .request =
+          QJsonObject{
+              {u"doc_id"_s, session_->documentId()},
+              {u"page"_s, page.index},
+              {u"rect"_s, protocol::toJson(grid.tileRect(page, key.column, key.row))},
+              {u"width"_s, pixels.width},
+              {u"height"_s, pixels.height},
+              {u"zoom"_s, tileZoom_},
+              {u"device_scale"_s, devicePixelRatio_},
+              {u"mode"_s, u"interactive"_s},
+          },
+      .pixels = QSize(static_cast<int>(pixels.width), static_cast<int>(pixels.height)),
+      .wanted = wantedSince_.try_emplace(key, now).first->second,
+  };
 }
 
 bool DocumentCanvas::addStandIns(const protocol::Page &page, const TileKey &missing, FramePlan &plan) {
@@ -730,13 +741,14 @@ bool DocumentCanvas::addStandIns(const protocol::Page &page, const TileKey &miss
       continue;
     }
     cache_.touch(key, frame_);
-    plan.standIns.emplace_back(standIn.rank,
-                               CanvasTile{.key = key,
-                                          .rect = plan.view.tileItemRect(page, TileGrid(key.scale, tileSize_), key.column, key.row),
-                                          .image = entry->image,
-                                          .version = entry->version,
-                                          .current = false,
-                                          .exact = false});
+    plan.standIns.emplace_back(standIn.rank, CanvasTile{
+                                                 .key = key,
+                                                 .rect = plan.view.tileItemRect(page, TileGrid(key.scale, tileSize_), key.column, key.row),
+                                                 .image = entry->image,
+                                                 .version = entry->version,
+                                                 .current = false,
+                                                 .exact = false,
+                                             });
   }
   return !standIns.empty();
 }
@@ -941,12 +953,14 @@ void DocumentCanvas::sendPointer(protocol::PointerKind kind, const QMouseEvent &
   if (session_ == nullptr) {
     return;
   }
-  const protocol::PointerInput pointer{.kind = kind,
-                                       .position = geometry().viewPoint(event.position()),
-                                       .button = domButton(event.button() == Qt::NoButton ? Qt::LeftButton : event.button()),
-                                       .clicks = clicks_,
-                                       .modifiers = domModifiers(event.modifiers(), KeyMappingOptions::forPlatform()),
-                                       .pointerType = pointerTypeOf(event)};
+  const protocol::PointerInput pointer{
+      .kind = kind,
+      .position = geometry().viewPoint(event.position()),
+      .button = domButton(event.button() == Qt::NoButton ? Qt::LeftButton : event.button()),
+      .clicks = clicks_,
+      .modifiers = domModifiers(event.modifiers(), KeyMappingOptions::forPlatform()),
+      .pointerType = pointerTypeOf(event),
+  };
   session_->sendPointer(pointer);
 }
 

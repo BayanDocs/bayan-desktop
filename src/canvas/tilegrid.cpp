@@ -45,10 +45,12 @@ int TileGrid::rows(const protocol::Page &page) const { return static_cast<int>((
 DeviceRect TileGrid::tilePixels(const protocol::Page &page, int column, int row) const {
   const qint64 left = qint64{column} * tileSize_;
   const qint64 top = qint64{row} * tileSize_;
-  return {.x = left,
-          .y = top,
-          .width = std::min<qint64>(tileSize_, pageWidthPixels(page) - left),
-          .height = std::min<qint64>(tileSize_, pageHeightPixels(page) - top)};
+  return {
+      .x = left,
+      .y = top,
+      .width = std::min<qint64>(tileSize_, pageWidthPixels(page) - left),
+      .height = std::min<qint64>(tileSize_, pageHeightPixels(page) - top),
+  };
 }
 
 protocol::BluRect TileGrid::tileRect(const protocol::Page &page, int column, int row) const {
@@ -56,10 +58,12 @@ protocol::BluRect TileGrid::tileRect(const protocol::Page &page, int column, int
   const qint64 left = bluAt(pixels.x);
   const qint64 top = bluAt(pixels.y);
   // At least one BLU wide and high, as the engine requires; at any scale the shell uses, a pixel is far more than one BLU.
-  return {.x = left,
-          .y = top,
-          .width = std::max<qint64>(1, bluAt(pixels.right()) - left),
-          .height = std::max<qint64>(1, bluAt(pixels.bottom()) - top)};
+  return {
+      .x = left,
+      .y = top,
+      .width = std::max<qint64>(1, bluAt(pixels.right()) - left),
+      .height = std::max<qint64>(1, bluAt(pixels.bottom()) - top),
+  };
 }
 
 std::vector<TileKey> TileGrid::tilesIntersecting(const protocol::Page &page, const DeviceRect &area) const {
