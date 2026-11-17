@@ -142,7 +142,7 @@ jobs:
     runs-on: ubuntu-24.04
     # A container from the base image of deps/ubuntu-packages.lock (tests/ubuntu-packages/test_lock.py keeps them equal), as in ci.yml's Linux jobs.
     container:
-      image: docker.io/library/buildpack-deps:noble-scm@sha256:94ed690dd634b8b2f531eaa742fde9b1264077cd8ea695a3b960bd104ae4c481 # created 2026-10-26T23:50:00Z
+      image: docker.io/library/buildpack-deps:noble-scm@sha256:0f0bbda28bd5dfb36cf03fec38f05de01899ac76c68bfa68bd39dd40a49f9861 # created 2026-11-12T00:17:04Z
     timeout-minutes: 45
     permissions:
       contents: read # check out the repository
