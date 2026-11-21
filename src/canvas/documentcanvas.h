@@ -10,9 +10,10 @@
 //   re-renders a page (architecture §8).
 // - Input: keys, pointer events and input-method composition go to the engine as input messages (KeyMapping, ImeTranslator), and the
 //   input method learns the caret's position and the text around it from the engine's overlay and accessibility tree. Every key but Tab
-//   goes to the engine, with its modifiers: the shell binds none, so that it hides no Word shortcut (Control+= is subscript), and the
-//   engine receives the same keys from both shells (engine protocol §6.5). The keyboard scrolls and zooms through the document area
-//   instead (DocumentArea.qml and Main.qml, with scrollWithKey, zoomIn and zoomOut), so both stay keyboard-operable (ADR-0020 §5).
+//   goes to the engine, with its modifiers: the shell binds none, so that it hides no shortcut from the engine. The web shell sends fewer
+//   keys today, so the two shells do not send the engine the same keys; engine protocol v1 (§14.3) and DESK-004 make them agree
+//   (keyPressEvent). The keyboard scrolls and zooms through the document area instead (DocumentArea.qml and Main.qml, with scrollWithKey,
+//   zoomIn and zoomOut), so both stay keyboard-operable (ADR-0020 §5).
 // - Accessibility: CanvasAccessible presents the engine's accessibility tree to screen readers; the canvas keeps its text (AccessibleText)
 //   and reports changes of the text and the caret.
 //
