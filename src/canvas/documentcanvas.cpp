@@ -807,10 +807,14 @@ void DocumentCanvas::reportCompleteness(bool complete) {
 }
 
 void DocumentCanvas::keyPressEvent(QKeyEvent *event) {
-  // Every key but Tab goes to the engine, with its modifiers, as from the web shell: Page Up, Page Down, Home, End and the arrows, and
-  // Control with =, - or 0, which the shell no longer keeps for zooming (Control+= is Word's subscript). Tab moves the keyboard focus out
-  // of the canvas, so the keyboard never gets stuck in it (ADR-0020 §5); the document area before it scrolls with the keys, and the zoom
-  // buttons zoom.
+  // While a document is open, every key but Tab goes to the engine as input.key, with its modifiers: Page Up, Page Down, Home, End and the
+  // arrows, but also the function keys and Control with A, V, =, - or 0 (the shell no longer keeps Control with =, - and 0 for zooming: the
+  // zoom buttons zoom); a key that types text goes as input.text as well, unless an input method is composing. The web shell does not do
+  // the same today: it sends twelve editing keys and the shortcuts of the engine's manifest, and typed text only as input.text
+  // (architecture review of 2026-11-20, H8). Engine protocol v1 makes the two shells agree (§14.3 of docs/specs/engine-protocol.md): each
+  // sends input.key for exactly the presses that the manifest's bindings and document keys name and no reserved key matches, and typed text
+  // only as input.text; DESK-004 moves the desktop to it. Tab moves the keyboard focus out of the canvas, so the keyboard never gets stuck
+  // in it (ADR-0020 §5); the document area before it scrolls with the keys, and the zoom buttons zoom.
   if (event->key() == Qt::Key_Tab || event->key() == Qt::Key_Backtab || session_ == nullptr || session_->documentId() <= 0) {
     event->ignore();
     return;
