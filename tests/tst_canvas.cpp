@@ -448,10 +448,10 @@ void TestCanvas::theWheelScrollsAndZooms() {
 }
 
 void TestCanvas::everyKeyButTabGoesToTheEngine() {
-  // The canvas keeps no key for itself, as the web shell (review H5): Page Up, Page Down, Home, End and the arrows go to the engine with
-  // their modifiers, and so do Control with =, -, + and 0, which zoomed before and hid Word's shortcuts (Control+= is subscript). Each key
-  // press is one input.key request; QTest also presses the modifier keys, which the canvas forwards too. The view neither scrolls nor
-  // zooms.
+  // The canvas keeps no key for itself (FU-8, after review H5): Page Up, Page Down, Home, End and the arrows go to the engine with their
+  // modifiers, and so do Control with =, -, + and 0, which zoomed before. The web shell sends the view keys too, but not Control with =, -,
+  // + or 0; engine protocol v1 (§14.3) and DESK-004 make the two shells agree (DocumentCanvas::keyPressEvent). Each key press is one
+  // input.key request; QTest also presses the modifier keys, which the canvas forwards too. The view neither scrolls nor zooms.
   const auto fixture = openDocument();
   QVERIFY(fixture);
   bayan::DocumentCanvas &canvas = *fixture->canvas;

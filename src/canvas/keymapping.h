@@ -9,8 +9,9 @@
 //
 // Typing a character sends both: input.key for the key press (the engine may treat it as a shortcut) and input.text for the character.
 // The canvas sends every key press this way except Tab, which moves the keyboard focus on: Page Up, Page Down, Home, End and the arrows
-// with their modifiers, as the web shell does, and shortcuts such as Control+= (Word's subscript), which the shell keeps for nothing of
-// its own (DocumentCanvas::keyPressEvent).
+// with their modifiers, as the web shell does, but also keys that the web shell does not send today, such as Control with =, - or 0 and
+// the function keys, which the shell keeps for nothing of its own; the web shell also sends typed text as input.text only. Engine
+// protocol v1 (§14.3) and DESK-004 make the two shells agree (DocumentCanvas::keyPressEvent).
 
 #pragma once
 
