@@ -9,6 +9,7 @@
 #include "documentcanvas.h"
 #include "documentsession.h"
 #include "engine.h"
+#include "enginemessages.h"
 #include "pixelprobe.h"
 
 #include <QtCore/QDir>
@@ -21,9 +22,11 @@
 #include <QtGui/QStyleHints>
 #include <QtGui/QTextCharFormat>
 #include <QtQuick/QQuickWindow>
+#include <QtTest/QSignalSpy>
 #include <QtTest/QTest>
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <utility>
@@ -54,11 +57,17 @@ struct Fixture {
   [[nodiscard]] bool hasMockDocument() const { return session->features().contains(u"mock_document"_s); }
 };
 
-std::unique_ptr<Fixture> openDocument(QSize size = QSize(900, 700)) {
+// Opens the engine's document in a new window. The engine is created with the configuration given, and beforeStart, if given, sees it
+// before the session sends its first message.
+std::unique_ptr<Fixture> openDocument(QSize size = QSize(900, 700), const QJsonObject &config = {},
+                                      const std::function<void(bayan::Engine &)> &beforeStart = {}) {
   auto fixture = std::make_unique<Fixture>();
-  fixture->engine = bayan::Engine::create();
+  fixture->engine = bayan::Engine::create(config);
   if (!fixture->engine) {
     return nullptr;
+  }
+  if (beforeStart) {
+    beforeStart(*fixture->engine);
   }
   fixture->session = std::make_unique<bayan::DocumentSession>(*fixture->engine);
   fixture->window = std::make_unique<QQuickWindow>();
@@ -270,9 +279,10 @@ private slots:
   void zoomStretchesTilesUntilTheNewOnesArrive();
   void zoomKeepsThePointUnderThePointer();
   void standInsAreDrawnInTheOrderGiven();
-  void aNewSessionForgetsTheOldEnginesChanges();
+  void aNewDocumentForgetsTheOldDocumentsRevisions();
+  void zoomingAsksForTheNewScalesTilesItself();
   void theWheelScrollsAndZooms();
-  void everyKeyButTabGoesToTheEngine();
+  void onlyTheManifestsKeysGoToTheEngine();
   void scrollWithKeyScrollsLikeAFocusedScroller();
   void zoomInAndOutStepThroughTheZoomSteps();
   void tabLeavesTheCanvas();
@@ -290,6 +300,7 @@ private slots:
   void doubleClickIsTwoPressesAndTwoReleases();
   void inputMethodSeesTheCaretAndTheTextAroundIt();
   void accessibilityExposesTheDocumentText();
+  void accessibilityExposesEveryChildOfANodeLoadedInParts();
   void accessibilityReportsTextAndCaretChanges();
   void accessibleEditingGoesThroughTheEngine();
   void destroyingTheWindowWhileTilesRenderIsSafe();
@@ -405,22 +416,23 @@ void TestCanvas::standInsAreDrawnInTheOrderGiven() {
   QVERIFY(orders.at(2) == orders.at(1));
 }
 
-void TestCanvas::aNewSessionForgetsTheOldEnginesChanges() {
+void TestCanvas::aNewDocumentForgetsTheOldDocumentsRevisions() {
   const auto fixture = openDocument();
   QVERIFY(fixture);
   bayan::DocumentCanvas &canvas = *fixture->canvas;
-  // Views of other zooms: the engine changes every page while handling requests that a new engine will not reach for a while.
-  int invalidations = 0;
-  const QMetaObject::Connection counter =
-      connect(fixture->session.get(), &bayan::DocumentSession::invalidated, this, [&invalidations] { ++invalidations; });
-  for (int step = 1; step <= 20; ++step) {
-    fixture->session->setView({.viewport = QRectF(0, 0, 900, 700), .zoom = 1.0 + (step * 0.01), .deviceScale = 1.0});
-  }
-  // At least those 20: the canvas may send a view of its own meanwhile.
-  QTRY_VERIFY(invalidations >= 20);
-  disconnect(counter);
-  QTRY_VERIFY(canvas.tilesComplete());
-  // Another document in the same canvas, from a new engine that counts its requests from 1 again.
+  // The engine changes the page in a revision far beyond the tiles' (engine protocol §14.6): the canvas keeps showing the tiles it has and
+  // asks for them again.
+  QSignalSpy invalidated(fixture->session.get(), &bayan::DocumentSession::invalidated);
+  const QJsonObject page{
+      {u"page"_s, 0},
+      {u"rect"_s, QJsonObject{{u"x"_s, 0}, {u"y"_s, 0}, {u"width"_s, 15'544'800}, {u"height"_s, 20'116'800}}},
+  };
+  QVERIFY(bayan::test::deliver(
+      *fixture->engine, bayan::test::engineEvent(u"render.invalidate"_s,
+                                                 QJsonObject{{u"doc_id"_s, 1}, {u"revision"_s, 500}, {u"regions"_s, QJsonArray{page}}})));
+  QTRY_COMPARE(invalidated.count(), 1);
+  QTRY_VERIFY(!canvas.tilesComplete());
+  // Another document in the same canvas, from a new engine, whose revisions start again at 1: its tiles are current.
   const auto engine = bayan::Engine::create();
   QVERIFY(engine);
   bayan::DocumentSession session(*engine);
@@ -429,6 +441,23 @@ void TestCanvas::aNewSessionForgetsTheOldEnginesChanges() {
   QTRY_VERIFY(session.status() == bayan::DocumentSession::Status::Ready);
   QTRY_VERIFY(canvas.tilesComplete());
   canvas.setSession(nullptr);
+}
+
+void TestCanvas::zoomingAsksForTheNewScalesTilesItself() {
+  // A new zoom invalidates nothing in print mode (engine protocol §14.6 item 2): the canvas asks for the tiles of the new scale by itself,
+  // and shows them complete without any render.invalidate.
+  const auto fixture = openDocument();
+  QVERIFY(fixture);
+  bayan::DocumentCanvas &canvas = *fixture->canvas;
+  QSignalSpy invalidated(fixture->session.get(), &bayan::DocumentSession::invalidated);
+  const qint64 rendered = canvas.statistics().tilesRendered;
+  canvas.setZoom(1.5);
+  canvas.commitZoom();
+  QTRY_VERIFY(canvas.tilesComplete());
+  QVERIFY(canvas.statistics().tilesRendered > rendered);
+  QCOMPARE(invalidated.count(), 0);
+  const auto problem = pixelProblem(*fixture);
+  QVERIFY2(!problem, qPrintable(problem.value_or(QString())));
 }
 
 void TestCanvas::theWheelScrollsAndZooms() {
@@ -447,49 +476,66 @@ void TestCanvas::theWheelScrollsAndZooms() {
   QCOMPARE(canvas.zoom(), 1.1);
 }
 
-void TestCanvas::everyKeyButTabGoesToTheEngine() {
-  // The canvas keeps no key for itself (FU-8, after review H5): Page Up, Page Down, Home, End and the arrows go to the engine with their
-  // modifiers, and so do Control with =, -, + and 0, which zoomed before. The web shell sends the view keys too, but not Control with =, -,
-  // + or 0; engine protocol v1 (§14.3) and DESK-004 make the two shells agree (DocumentCanvas::keyPressEvent). Each key press is one
-  // input.key request; QTest also presses the modifier keys, which the canvas forwards too. The view neither scrolls nor zooms.
+void TestCanvas::onlyTheManifestsKeysGoToTheEngine() {
+  // Engine protocol §14.3: a press goes to the engine as input.key exactly when the manifest's key data say so, which both engines resolve
+  // for this platform: the document keys (Page Up, Page Down, Home, End and the arrows, with any modifiers, Escape) and the bindings
+  // (Control +B, or Command+B on macOS, which Qt reports as Control there). Typed text goes as input.text only. Control with =, +, - or 0,
+  // which no manifest binds yet, the clipboard keys, which are the shell's, Tab and the modifier keys themselves stay with Qt. The view
+  // neither scrolls nor zooms.
   const auto fixture = openDocument();
   QVERIFY(fixture);
   bayan::DocumentCanvas &canvas = *fixture->canvas;
   bayan::Engine &engine = *fixture->engine;
+  QTRY_VERIFY(!fixture->session->keyBindings().manifest().commands.empty());
   QTest::qWait(300); // Lets a view.set scheduled while the document opened go out first.
+  QStringList sent;
+  engine.setSentObserverForTesting([&sent](const QJsonObject &envelope) { sent.append(envelope.value(u"type"_s).toString()); });
   struct Press {
     Qt::Key key;
     Qt::KeyboardModifiers modifiers;
-    qint64 requests;
+    QString text;
+    QStringList messages;
   };
+  const QStringList key{u"input.key"_s};
   const std::vector<Press> presses{
-      {.key = Qt::Key_PageDown, .modifiers = Qt::NoModifier, .requests = 1},
-      {.key = Qt::Key_PageUp, .modifiers = Qt::NoModifier, .requests = 1},
-      {.key = Qt::Key_End, .modifiers = Qt::NoModifier, .requests = 1},
-      {.key = Qt::Key_Home, .modifiers = Qt::NoModifier, .requests = 1},
-      {.key = Qt::Key_End, .modifiers = Qt::ControlModifier, .requests = 2},
-      {.key = Qt::Key_Home, .modifiers = Qt::ControlModifier, .requests = 2},
-      {.key = Qt::Key_PageDown, .modifiers = Qt::ShiftModifier, .requests = 2},
-      {.key = Qt::Key_Down, .modifiers = Qt::NoModifier, .requests = 1},
-      {.key = Qt::Key_Up, .modifiers = Qt::NoModifier, .requests = 1},
-      {.key = Qt::Key_Equal, .modifiers = Qt::ControlModifier, .requests = 2},
-      {.key = Qt::Key_Plus, .modifiers = Qt::ControlModifier, .requests = 2},
-      {.key = Qt::Key_Minus, .modifiers = Qt::ControlModifier, .requests = 2},
-      {.key = Qt::Key_0, .modifiers = Qt::ControlModifier, .requests = 2},
+      {.key = Qt::Key_PageDown, .modifiers = Qt::NoModifier, .text = {}, .messages = key},
+      {.key = Qt::Key_PageUp, .modifiers = Qt::NoModifier, .text = {}, .messages = key},
+      {.key = Qt::Key_End, .modifiers = Qt::NoModifier, .text = {}, .messages = key},
+      {.key = Qt::Key_Home, .modifiers = Qt::NoModifier, .text = {}, .messages = key},
+      {.key = Qt::Key_End, .modifiers = Qt::ControlModifier, .text = {}, .messages = key},
+      {.key = Qt::Key_Home, .modifiers = Qt::ControlModifier, .text = {}, .messages = key},
+      {.key = Qt::Key_PageDown, .modifiers = Qt::ShiftModifier, .text = {}, .messages = key},
+      {.key = Qt::Key_Down, .modifiers = Qt::NoModifier, .text = {}, .messages = key},
+      {.key = Qt::Key_Up, .modifiers = Qt::NoModifier, .text = {}, .messages = key},
+      {.key = Qt::Key_Escape, .modifiers = Qt::NoModifier, .text = {}, .messages = key},
+      {.key = Qt::Key_B, .modifiers = Qt::ControlModifier, .text = {}, .messages = key},
+      {.key = Qt::Key_A, .modifiers = Qt::NoModifier, .text = u"a"_s, .messages = {u"input.text"_s}},
+      {.key = Qt::Key_Equal, .modifiers = Qt::ControlModifier, .text = {}, .messages = {}},
+      {.key = Qt::Key_Plus, .modifiers = Qt::ControlModifier, .text = {}, .messages = {}},
+      {.key = Qt::Key_Minus, .modifiers = Qt::ControlModifier, .text = {}, .messages = {}},
+      {.key = Qt::Key_0, .modifiers = Qt::ControlModifier, .text = {}, .messages = {}},
+      {.key = Qt::Key_C, .modifiers = Qt::ControlModifier, .text = {}, .messages = {}},
+      {.key = Qt::Key_V, .modifiers = Qt::ControlModifier, .text = {}, .messages = {}},
+      {.key = Qt::Key_F6, .modifiers = Qt::NoModifier, .text = {}, .messages = {}},
   };
   for (const Press &press : presses) {
-    const qint64 before = engine.lastPostedRequest();
-    QTest::keyClick(fixture->window.get(), press.key, press.modifiers);
-    QCOMPARE(engine.lastPostedRequest(), before + press.requests);
+    sent.clear();
+    if (press.text.isEmpty()) {
+      QTest::keyClick(fixture->window.get(), press.key, press.modifiers);
+    } else {
+      QTest::keyClick(fixture->window.get(), press.text.at(0).toLatin1(), press.modifiers);
+    }
+    QVERIFY2(sent == press.messages, qPrintable(QKeySequence(press.key | press.modifiers).toString() + u": "_s + sent.join(u", "_s)));
   }
   QTest::qWait(300); // Longer than a smooth scroll and than the zoom settling.
   QCOMPARE(canvas.zoom(), 1.0);
   QCOMPARE(canvas.contentY(), 0.0);
   QCOMPARE(canvas.contentX(), 0.0);
-  // Tab is the exception: it moves the keyboard focus on (tabLeavesTheCanvas) and sends nothing.
-  const qint64 before = engine.lastPostedRequest();
+  // Tab moves the keyboard focus on (tabLeavesTheCanvas) and sends nothing.
+  sent.clear();
   QTest::keyClick(fixture->window.get(), Qt::Key_Tab);
-  QCOMPARE(engine.lastPostedRequest(), before);
+  QVERIFY(sent.isEmpty());
+  engine.setSentObserverForTesting({});
 }
 
 void TestCanvas::scrollWithKeyScrollsLikeAFocusedScroller() {
@@ -904,7 +950,7 @@ void TestCanvas::accessibilityExposesTheDocumentText() {
   QCOMPARE(accessible->text(QAccessible::Name), u"BayanDocs mock document"_s);
   const QAccessible::State state = accessible->state();
   QVERIFY(state.focusable && state.focused && state.editable && state.multiLine);
-  QVERIFY(!state.selectableText); // Protocol v0 has no selection to offer.
+  QVERIFY(!state.selectableText); // The engine at the pinned core offers no selection yet.
   QVERIFY(accessible->parent() != nullptr);
   QAccessibleTextInterface *text = accessible->textInterface();
   QVERIFY(text != nullptr && accessible->editableTextInterface() != nullptr);
@@ -925,6 +971,75 @@ void TestCanvas::accessibilityExposesTheDocumentText() {
   QVERIFY(canvasRect.contains(text->characterRect(0).center()));
   QVERIFY(canvasRect.contains(text->characterRect(caret).center()));
   QCOMPARE(text->offsetAtPoint(canvasRect.center()), -1);
+}
+
+void TestCanvas::accessibilityExposesEveryChildOfANodeLoadedInParts() {
+  // A node with more children than one message holds (engine protocol §14.7 item 1): the canvas's accessibility interface, which screen
+  // readers use through Qt's bridges, shows every child once the session has loaded the rest with children ranges. The stub has no tree of
+  // its own, so the test answers query.a11y in its place, with a document of five paragraphs that the engine hands out in parts.
+  QList<QJsonObject> queries;
+  const auto observe = [&queries](bayan::Engine &engine) {
+    engine.setSentObserverForTesting([&queries](const QJsonObject &envelope) {
+      if (envelope.value(u"type"_s) == u"query.a11y"_s) {
+        queries.append(envelope);
+      }
+    });
+  };
+  const auto fixture = openDocument(QSize(900, 700), QJsonObject{{u"test"_s, QJsonObject{{u"query_a11y"_s, u"ignore"_s}}}}, observe);
+  if (!fixture) {
+    QVERIFY2(!bayan::Engine::version().endsWith(u"-stub"_s), "the stub refused its query_a11y switch");
+    QSKIP("Needs the stub's query_a11y test switch.");
+  }
+  bayan::Engine &engine = *fixture->engine;
+  // Answers a query with the document node holding the children from start to end of its five.
+  const auto answer = [&engine](const QJsonObject &query, int start, int end) {
+    QJsonArray children;
+    for (int index = start; index < end; ++index) {
+      children.append(QJsonObject{{u"id"_s, index + 2}, {u"role"_s, u"paragraph"_s}, {u"text"_s, u"Paragraph %1"_s.arg(index)}});
+    }
+    const QJsonObject root{
+        {u"id"_s, 1},          {u"role"_s, u"document"_s},   {u"name"_s, u"Five paragraphs"_s},
+        {u"child_count"_s, 5}, {u"children_start"_s, start}, {u"children"_s, children},
+    };
+    const QJsonObject payload{
+        {u"doc_id"_s, query.value(u"payload"_s).toObject().value(u"doc_id"_s)},
+        {u"root"_s, root},
+        {u"caret"_s, QJsonValue::Null},
+    };
+    return bayan::test::deliver(engine, QJsonObject{{u"v"_s, 1}, {u"re"_s, query.value(u"id"_s)}, {u"ok"_s, true}, {u"payload"_s, payload}},
+                                u"query.a11y"_s);
+  };
+  const auto range = [](const QJsonObject &query) {
+    const QJsonObject payload = query.value(u"payload"_s).toObject();
+    return std::pair{payload.value(u"node"_s).toInteger(-1), payload.value(u"children"_s).toObject()};
+  };
+  const auto children = [](int start, int count) { return QJsonObject{{u"start"_s, start}, {u"count"_s, count}}; };
+  QAccessibleInterface *accessible = QAccessible::queryAccessibleInterface(fixture->canvas);
+  QVERIFY(accessible != nullptr && accessible->isValid());
+  QAccessibleTextInterface *text = accessible->textInterface();
+  QVERIFY(text != nullptr);
+  const auto shown = [text] { return text->text(0, text->characterCount()); };
+
+  // The whole tree first, with two of the five children.
+  QTRY_COMPARE(queries.size(), 1);
+  QCOMPARE(range(queries.at(0)).first, -1);
+  QVERIFY(answer(queries.at(0), 0, 2));
+  QTRY_COMPARE(shown(), u"Paragraph 0\nParagraph 1"_s);
+  QCOMPARE(accessible->text(QAccessible::Name), u"Five paragraphs"_s);
+  // The session asks for the other three; the engine fits one into its answer, and the session asks for the last two.
+  QTRY_COMPARE(queries.size(), 2);
+  QCOMPARE(range(queries.at(1)), std::pair(qint64{1}, children(2, 3)));
+  QVERIFY(answer(queries.at(1), 2, 3));
+  QTRY_COMPARE(queries.size(), 3);
+  QCOMPARE(range(queries.at(2)), std::pair(qint64{1}, children(3, 2)));
+  QTRY_COMPARE(shown(), u"Paragraph 0\nParagraph 1\nParagraph 2"_s);
+  QVERIFY(answer(queries.at(2), 3, 5));
+  QTRY_COMPARE(shown(), u"Paragraph 0\nParagraph 1\nParagraph 2\nParagraph 3\nParagraph 4"_s);
+  QVERIFY(!fixture->session->loadingAccessibilityParts());
+  // The tree is complete: nothing more is asked for.
+  QTest::qWait(100);
+  QCOMPARE(queries.size(), 3);
+  engine.setSentObserverForTesting({});
 }
 
 void TestCanvas::accessibilityReportsTextAndCaretChanges() {

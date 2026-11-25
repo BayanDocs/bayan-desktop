@@ -1,9 +1,10 @@
-// The engine's protocol data as C++ values: pages, overlays, the accessibility tree and input events (engine protocol §6, §7).
+// The engine's protocol data as C++ values: the handshake, the UI manifest's key data, pages, overlays, the accessibility tree and input
+// events (engine protocol §5, §6, §7, §14).
 //
 // The shell receives these as JSON and keeps them only to draw and to relay: it places pages and overlays where the engine says, and hands
 // the accessibility tree to the platform's screen readers. It never derives document behaviour from them (ADR-0013 §3). Every parser checks
 // sizes and ranges, because messages from the engine are treated as untrusted input like any other (AGENTS.md §6): a malformed value makes
-// the whole message invalid rather than being guessed at.
+// the whole message invalid rather than being guessed at, and the shell then stops using the engine (engine protocol §14.1 item 5).
 
 #pragma once
 
@@ -12,6 +13,7 @@
 #include <QtCore/QJsonValue>
 #include <QtCore/QPointF>
 #include <QtCore/QString>
+#include <QtCore/QStringList>
 #include <QtCore/QtTypes>
 
 #include <cstdint>
@@ -30,6 +32,21 @@ inline constexpr qint64 kMaxCoordinate = static_cast<qint64>(quint64{1} << 40U);
 inline constexpr qint64 kMaxPageSide = static_cast<qint64>(quint64{1} << 38U);
 // The most pages a document may announce; more is treated as a broken message.
 inline constexpr int kMaxPages = 1'000'000;
+// The longest engine version (engine protocol §14.1 item 6): at most 64 ASCII characters.
+inline constexpr int kMaxEngineVersionLength = 64;
+
+// welcome, the reply to hello (engine protocol §5, §14.1).
+struct Welcome {
+  int protocolVersion = 0;
+  // The core's version, at most kMaxEngineVersionLength printable ASCII characters.
+  QString engineVersion;
+  qint64 layoutEpoch = 0;
+  QStringList features;
+};
+[[nodiscard]] std::optional<Welcome> parseWelcome(const QJsonObject &payload);
+
+// A render revision (engine protocol §14.6): a positive integer below 2^53. Nothing if the value is not one.
+[[nodiscard]] std::optional<quint64> parseRevision(const QJsonValue &value);
 
 // A rectangle in BLU, in page coordinates or view space. Width and height are never negative.
 struct BluRect {
@@ -72,12 +89,48 @@ struct Caret {
   friend bool operator==(const Caret &, const Caret &) = default;
 };
 
-// What overlay.update asks the shell to draw over the tiles. Remote cursors and find highlights are empty in v0 and not kept.
+// What overlay.update asks the shell to draw over the tiles. Remote cursors and find highlights belong to later phases and are not kept.
 struct Overlay {
   std::optional<Caret> caret;
   std::vector<PageRect> selection;
   friend bool operator==(const Overlay &, const Overlay &) = default;
 };
+
+// One entry of the UI manifest's key data (engine protocol §14.3): a binding of a command, a document key or a reserved key. It names the
+// key by key, the DOM's KeyboardEvent.key, or by code, the DOM's KeyboardEvent.code (exactly one of them is not empty), and gives the
+// modifiers that matter; one that it leaves out matches either state. A binding gives all four, and label, the binding as the platform
+// writes it, formatted by the engine; the shell shows it where it shows the shortcut and never builds such text itself.
+struct KeyEntry {
+  QString key;
+  QString code;
+  std::optional<bool> ctrl;
+  std::optional<bool> shift;
+  std::optional<bool> alt;
+  std::optional<bool> meta;
+  QString label;
+  friend bool operator==(const KeyEntry &, const KeyEntry &) = default;
+};
+
+// A command of the UI manifest, with its bindings resolved for the session's platform and runtime.
+struct ManifestCommand {
+  QString id;
+  QString label;
+  std::vector<KeyEntry> bindings;
+  // For a command that the shell carries out itself through the platform: copy, cut or paste in v1, or a value of a later manifest.
+  std::optional<QString> shellAction;
+  friend bool operator==(const ManifestCommand &, const ManifestCommand &) = default;
+};
+
+// The key data of the UI manifest (engine protocol §6.8, §14.3): the commands with their bindings, the keys that the engine handles in the
+// document area with any modifiers, and the presses that the shell keeps.
+struct UiManifest {
+  std::vector<ManifestCommand> commands;
+  std::vector<KeyEntry> documentKeys;
+  std::vector<KeyEntry> reservedKeys;
+  friend bool operator==(const UiManifest &, const UiManifest &) = default;
+};
+// The reply to ui.manifest. Its ribbon must be an object, as the protocol requires, but is not read yet.
+[[nodiscard]] std::optional<UiManifest> parseUiManifest(const QJsonObject &payload);
 
 // The roles of accessibility nodes (§6.6). Roles that a later engine adds arrive as Other, so an older shell keeps working (§9).
 enum class Role : std::uint8_t { Document, Heading, Paragraph, List, ListItem, Table, Row, ColumnHeader, Cell, Other };
@@ -91,6 +144,9 @@ struct CharBox {
 };
 
 // A node of the engine's accessibility tree (§6.6). Its children are named by their identifiers, in reading order; the tree holds them.
+// The engine may give a node with only a part of its children, when the whole would not fit into one message (§14.7 item 1): such a node
+// has childCount, its number of children, and childIndices, the index of each child that the tree holds, in the order of children. The
+// shell loads the other parts with query.a11y and a children range, and once the tree holds every child, both are empty again.
 struct AccessibleNode {
   quint64 id = 0;
   Role role = Role::Other;
@@ -103,7 +159,17 @@ struct AccessibleNode {
   std::optional<PageRect> bounds;
   std::vector<CharBox> chars;
   std::vector<quint64> children;
+  std::optional<quint32> childCount;
+  std::vector<quint32> childIndices;
   friend bool operator==(const AccessibleNode &, const AccessibleNode &) = default;
+};
+
+// Children that a node lacks: query.a11y { node, children: { start, count } } loads them (§14.7 item 1).
+struct MissingChildren {
+  quint64 node = 0;
+  quint32 start = 0;
+  quint32 count = 0;
+  friend bool operator==(const MissingChildren &, const MissingChildren &) = default;
 };
 
 // The accessibility caret: a position in a node's text, in UTF-16 code units.
@@ -113,13 +179,15 @@ struct AccessibleCaret {
   friend bool operator==(const AccessibleCaret &, const AccessibleCaret &) = default;
 };
 
-// Limits on an accessibility tree, beyond the engine's own message limit of 16 MiB.
+// The limits of an accessibility tree (engine protocol §13, §14.7 item 1), which the engine keeps: at most 64 levels deep, the document
+// node being level 1, and at most 200,000 nodes in one reply to query.a11y or one change of an a11y.update. A tree beyond them breaks the
+// protocol. The tree a shell holds may have more nodes, once it has loaded the parts of nodes with many children.
 inline constexpr int kMaxTreeDepth = 64;
 inline constexpr int kMaxTreeNodes = 200'000;
 
 // The engine's accessibility tree, kept flat: every node by its identifier, and the root's. Nothing walks it recursively, so a deep tree
 // from the engine cannot exhaust the shell's stack. Only parseAccessibleTree creates trees, so every tree is well formed: identifiers are
-// unique, every child exists and has one parent, and the limits above hold.
+// unique, every child exists and has one parent, no node holds more children than it has, and the depth limit holds.
 class AccessibleTree {
 public:
   [[nodiscard]] const AccessibleNode &root() const;
@@ -127,14 +195,24 @@ public:
   [[nodiscard]] std::size_t size() const { return nodes_.size(); }
   // The nodes in reading order: depth first, each node before its children, as the engine lists them.
   [[nodiscard]] std::vector<const AccessibleNode *> readingOrder() const;
+  // How deep a node sits: 1 for the root, which is the document node in the tree of a whole document; 0 if it is not in the tree. It
+  // follows the node's parents, so it costs no more than the tree's depth.
+  [[nodiscard]] int levelOf(quint64 id) const;
+  // The children that nodes lack, in reading order, and for each node from its first child to its last.
+  [[nodiscard]] std::vector<MissingChildren> missingChildren() const;
   // Replaces the node with subtree's root identifier, and everything below it, with subtree (a11y.update, kind "replace"). Returns false
-  // and changes nothing if there is no such node, or if the result would exceed the limits or reuse an identifier from elsewhere.
+  // and changes nothing if there is no such node, or if the result would exceed the depth limit or reuse an identifier from elsewhere.
   [[nodiscard]] bool replace(const AccessibleTree &subtree);
+  // Adds a part of a node's children that query.a11y with a children range loaded: part's root is that node, as the engine has it now, with
+  // the children of the range and their subtrees. Children of the node that the part holds replace those at the same indices; the node's
+  // own fields and its number of children become the part's. Returns false and changes nothing if there is no such node, or if the result
+  // would exceed the depth limit or reuse an identifier from elsewhere.
+  [[nodiscard]] bool addChildren(const AccessibleTree &part);
   friend bool operator==(const AccessibleTree &, const AccessibleTree &) = default;
 
 private:
-  friend std::optional<AccessibleTree> parseAccessibleTree(const QJsonValue &value, int pageCount);
-  AccessibleTree(quint64 root, std::map<quint64, AccessibleNode> nodes) : root_(root), nodes_(std::move(nodes)) {}
+  friend std::optional<AccessibleTree> parseAccessibleTree(const QJsonValue &value, int pageCount, int rootLevel);
+  AccessibleTree(quint64 root, std::map<quint64, AccessibleNode> nodes);
 
   // A node and everything below it: their identifiers, and how many levels deep it goes (1 for a node without children).
   struct Subtree {
@@ -142,12 +220,24 @@ private:
     int height = 0;
   };
   [[nodiscard]] Subtree subtree(quint64 id) const;
-  // How deep a node sits (1 for the root), or 0 if it is not in the tree.
-  [[nodiscard]] int depthOf(quint64 id) const;
+  // Whether part's nodes may join this tree: none of its identifiers is used elsewhere, outside the subtrees of the nodes leaving.
+  [[nodiscard]] bool fits(const AccessibleTree &part, const std::vector<quint64> &leaving) const;
+  // Records the parent of every node below id, which the tree holds with its subtree.
+  void indexParents(quint64 id);
 
   quint64 root_ = 0;
   std::map<quint64, AccessibleNode> nodes_;
+  // The parent of every node but the root.
+  std::map<quint64, quint64> parents_;
 };
+
+// The identifier of a node of the accessibility tree as a message gives it: the node must be an object, and its id an integer from 1 to
+// 2^53 - 1 (engine protocol §6.6, §14.1 item 5). Nothing if it is not.
+[[nodiscard]] std::optional<quint64> parseNodeId(const QJsonValue &node);
+
+// Whether an answer to query.a11y with a children range from start holds what engine protocol §14.7 item 1 requires of it: the child at
+// start, whenever the node it gives has a child there.
+[[nodiscard]] bool holdsChildFrom(const AccessibleNode &node, quint32 start);
 
 // Parsers. Each returns nothing if the value does not have the shape and ranges the protocol allows.
 [[nodiscard]] std::optional<BluRect> parseRect(const QJsonValue &value);
@@ -157,8 +247,10 @@ private:
 [[nodiscard]] std::optional<std::vector<PageRect>> parseRegions(const QJsonArray &regions, int pageCount);
 // The payload of overlay.update (without doc_id, which the caller checks).
 [[nodiscard]] std::optional<Overlay> parseOverlay(const QJsonObject &payload, int pageCount);
-// A node and its subtree: the root of query.a11y, or the node of an a11y.update change.
-[[nodiscard]] std::optional<AccessibleTree> parseAccessibleTree(const QJsonValue &value, int pageCount);
+// A node and its subtree: the root of query.a11y, or the node of an a11y.update change. rootLevel is the level of that node in the
+// document's tree (1 for the document node), so that the depth limit counts from the document. Nothing if the tree is malformed, beyond the
+// limits, or a node holds more children than it says it has (§14.7 item 1).
+[[nodiscard]] std::optional<AccessibleTree> parseAccessibleTree(const QJsonValue &value, int pageCount, int rootLevel = 1);
 // The caret of query.a11y and a11y.update: an object, or null for "no caret" (the outer optional is empty if the value is malformed).
 [[nodiscard]] std::optional<std::optional<AccessibleCaret>> parseAccessibleCaret(const QJsonValue &value);
 

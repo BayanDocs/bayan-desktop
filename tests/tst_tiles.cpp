@@ -65,9 +65,10 @@ private slots:
   void tilesRenderedBeforeAChangeAreDirty();
   void changesElsewhereLeaveTilesFresh();
   void aTileRenderedWhileTheDocumentChangedIsDirty();
+  void aTileOfTheNewRevisionThatArrivesBeforeItsInvalidationStaysFresh();
   void stopsAskingForRefusedTiles();
   void forgetsOldInvalidationsSafely();
-  void resetForgetsTheChangesOfTheOldEngine();
+  void resetForgetsTheChangesOfTheOldDocument();
   void remembersManyChangedRectanglesAsOne();
   void standInsComeFromTheClosestZoomThatHasThem();
   void evictsTheLeastRecentlyUsedTilesOverBudget();
@@ -311,11 +312,12 @@ void TestTiles::tilesRenderedBeforeAChangeAreDirty() {
   QVERIFY(cache.deliver(key, image(size), 5));
   QVERIFY(!cache.needsRender(key));
   QCOMPARE(cache.find(key)->version, std::uint64_t{1});
-  // The engine changed part of the tile while handling request 7: the tile is still shown, but rendered again.
+  // The engine changed part of the tile, which raised the document's render revision to 7: the tile of revision 5 is still shown, but
+  // rendered again.
   cache.invalidate(0, {{.x = 100, .y = 100, .width = 10, .height = 10}}, 7);
   QVERIFY(cache.find(key)->dirty && !cache.find(key)->image.isNull());
   QVERIFY(cache.needsRender(key));
-  // A tile the engine rendered after handling request 7 is fresh.
+  // A tile of revision 7 is fresh.
   QVERIFY(cache.deliver(key, image(size), 7));
   QVERIFY(!cache.find(key)->dirty);
   QCOMPARE(cache.find(key)->version, std::uint64_t{2});
@@ -339,11 +341,28 @@ void TestTiles::aTileRenderedWhileTheDocumentChangedIsDirty() {
   const TileGrid grid(1.0, 512);
   const TileKey key{.page = 0, .scale = 1.0, .column = 0, .row = 0};
   cache.want(key, grid.tileRect(kLetter, 0, 0), QSize(512, 512), 1);
-  // The tile thread starts rendering after request 2; meanwhile the user types (request 3), which changes the tile's region.
+  // The tile thread renders revision 2; meanwhile the user types, which changes the tile's region in revision 3, and that invalidation
+  // arrives before the tile.
   cache.invalidate(0, {{.x = 0, .y = 0, .width = 100, .height = 100}}, 3);
   QVERIFY(cache.deliver(key, image(QSize(512, 512)), 2));
   QVERIFY(cache.find(key)->dirty);
   QVERIFY(cache.needsRender(key));
+}
+
+void TestTiles::aTileOfTheNewRevisionThatArrivesBeforeItsInvalidationStaysFresh() {
+  // Tiles and invalidations cross in time (engine protocol §14.6): the tile thread renders the tile after the change, at revision 3, and
+  // the tile reaches the cache before the invalidation of revision 3 does. The invalidation then changes nothing, because the tile already
+  // shows it; only an invalidation with a higher revision makes it dirty.
+  TileCache cache;
+  const TileGrid grid(1.0, 512);
+  const TileKey key{.page = 0, .scale = 1.0, .column = 0, .row = 0};
+  cache.want(key, grid.tileRect(kLetter, 0, 0), QSize(512, 512), 1);
+  QVERIFY(cache.deliver(key, image(QSize(512, 512)), 3));
+  cache.invalidate(0, {{.x = 0, .y = 0, .width = 100, .height = 100}}, 3);
+  QVERIFY(!cache.find(key)->dirty);
+  QVERIFY(!cache.needsRender(key));
+  cache.invalidate(0, {{.x = 0, .y = 0, .width = 100, .height = 100}}, 4);
+  QVERIFY(cache.find(key)->dirty);
 }
 
 void TestTiles::stopsAskingForRefusedTiles() {
@@ -375,8 +394,8 @@ void TestTiles::forgetsOldInvalidationsSafely() {
   cache.want(key, grid.tileRect(kLetter, 1, 1), QSize(304, 512), 1);
   // More changes than the cache remembers, all elsewhere. A tile rendered before the forgotten ones might have missed one of them, so it
   // counts as dirty; one rendered after them is fresh.
-  for (qint64 cause = 1; cause <= static_cast<qint64>(TileCache::kRememberedInvalidations) + 10; ++cause) {
-    cache.invalidate(0, {{.x = 0, .y = 0, .width = 10, .height = 10}}, cause);
+  for (quint64 revision = 1; revision <= quint64{TileCache::kRememberedInvalidations} + 10; ++revision) {
+    cache.invalidate(0, {{.x = 0, .y = 0, .width = 10, .height = 10}}, revision);
   }
   QVERIFY(cache.deliver(key, image(QSize(304, 512)), 2));
   QVERIFY(cache.find(key)->dirty);
@@ -384,17 +403,17 @@ void TestTiles::forgetsOldInvalidationsSafely() {
   QVERIFY(!cache.find(key)->dirty);
 }
 
-void TestTiles::resetForgetsTheChangesOfTheOldEngine() {
+void TestTiles::resetForgetsTheChangesOfTheOldDocument() {
   TileCache cache;
   const TileGrid grid(1.0, 512);
   const TileKey key{.page = 0, .scale = 1.0, .column = 0, .row = 0};
-  // Changes caused by requests up to 500 of one engine; clear() keeps them for tiles still being rendered.
+  // Changes up to revision 500 of one document; clear() keeps them for tiles still being rendered.
   cache.invalidate(0, {grid.tileRect(kLetter, 0, 0)}, 500);
   cache.clear();
   cache.want(key, grid.tileRect(kLetter, 0, 0), QSize(512, 512), 1);
   QVERIFY(cache.deliver(key, image(QSize(512, 512)), 3));
   QVERIFY(cache.find(key)->dirty);
-  // Another engine counts its requests from 1 again: after reset(), its tile rendered after request 3 is fresh.
+  // Another document counts its revisions from 1 again: after reset(), its tile of revision 3 is fresh.
   cache.reset();
   QCOMPARE(cache.size(), std::size_t{0});
   cache.want(key, grid.tileRect(kLetter, 0, 0), QSize(512, 512), 1);

@@ -9,9 +9,9 @@
 // - The selected part of the composition (the clause being converted) arrives as a styled range with a background colour on Windows and
 //   macOS; it becomes the composition's selection.
 // - Some input methods replace text next to the caret: macOS's accent menu (hold "e", choose "é"), Japanese reconversion, IBus's
-//   delete-surrounding-text. Qt says "replace length code units from start relative to the caret". Protocol v0 cannot express that, so the
-//   translator asks for deletions before and after the caret, which the canvas sends as Backspace and Delete keys. The DESK-002 report
-//   recommends a replacement range on input.text instead.
+//   delete-surrounding-text. Qt says "replace length code units from start relative to the caret". The engine at the pinned core cannot
+//   take that yet, so the translator asks for deletions before and after the caret, which the canvas sends as Backspace and Delete keys.
+//   Engine protocol §14.4 adds a replacement range on input.text (CORE-014), which DESK-005 will use instead.
 //
 // Pure logic without Qt Quick, so the tests can replay what each platform's input method sends.
 

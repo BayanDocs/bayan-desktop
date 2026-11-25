@@ -37,6 +37,23 @@ constexpr qint64 kBluPerDip = 19'050;
 
 QJsonObject helloPayload() { return QJsonObject{{u"protocol_versions"_s, QJsonArray{bayan::Engine::kProtocolVersion}}}; }
 
+// The configuration that lets diag.panic make the engine fail, with, for the stub, the restart values that the real engine's binding gives
+// the first failures within ten minutes: the stub counts nothing (engine protocol §14.2).
+QJsonObject allowPanic() {
+  QJsonObject test{{u"allow_panic"_s, true}};
+  if (isStub()) {
+    const auto restart = [](int number) { return QJsonObject{{u"number"_s, number}, {u"limit"_s, 3}}; };
+    test.insert(u"restarts"_s, QJsonArray{restart(1), restart(2), restart(3), QJsonValue::Null});
+  }
+  return QJsonObject{{u"test"_s, test}};
+}
+
+// A view.set of document 1 in a mode.
+QJsonObject viewIn(const QString &mode) {
+  const QJsonObject viewport{{u"x"_s, 0}, {u"y"_s, 0}, {u"width"_s, 1024}, {u"height"_s, 768}};
+  return QJsonObject{{u"doc_id"_s, 1}, {u"viewport"_s, viewport}, {u"zoom"_s, 1.0}, {u"device_scale"_s, 1.0}, {u"mode"_s, mode}};
+}
+
 QJsonObject pageRequest(qint64 x, qint64 y, qint64 width, qint64 height) {
   return QJsonObject{
       {u"doc_id"_s, 1},
@@ -105,7 +122,9 @@ private slots:
   void invalidTileRequestsAreRefused();
   void deliveriesFromAnotherThreadArriveOnTheMainThread();
   void malformedEngineMessagesAreProtocolErrors();
-  void repliesMustAnswerPostedRequestsInOrder();
+  void repliesMustAnswerRequestsThatWaitForThem();
+  void onlyTheReplyToHelloMayCarryAnotherVersion();
+  void tilesCarryTheirRevision();
   void oversizedEngineMessagesAreRejected();
   void theMessageHelpersHandOverNothingOfTheWrongKind();
   void destroyingWhileBusyIsSafe();
@@ -202,12 +221,10 @@ void TestEngine::openingADocumentAnnouncesItsPages() {
   const auto engine = openedEngine();
   QVERIFY(engine);
   QSignalSpy events(engine.get(), &bayan::Engine::eventReceived);
-  const QJsonObject viewport{{u"x"_s, 0}, {u"y"_s, 0}, {u"width"_s, 1024}, {u"height"_s, 768}};
-  QVERIFY(engine->post(
-      u"view.set"_s,
-      QJsonObject{{u"doc_id"_s, 1}, {u"viewport"_s, viewport}, {u"zoom"_s, 1.0}, {u"device_scale"_s, 1.0}, {u"mode"_s, u"print"_s}}));
+  QVERIFY(engine->post(u"view.set"_s, viewIn(u"print"_s)));
   QTRY_VERIFY(events.count() >= 3);
-  // First the pages, then what to draw again (engine protocol §6.2, §6.3).
+  // First the pages (engine protocol §6.2, §6.3). A document opens in print mode without formatting marks, so a first view.set in print
+  // mode changes nothing that tiles show and invalidates nothing (§14.6 item 2): the shell asks for the tiles it shows by itself.
   QCOMPARE(events.at(0).at(0).toString(), u"view.pages"_s);
   const QJsonArray pages = events.at(0).at(1).toJsonObject().value(u"pages"_s).toArray();
   // The stub has one test page; the real engine's mock document has three. Both are US Letter.
@@ -216,12 +233,23 @@ void TestEngine::openingADocumentAnnouncesItsPages() {
     QCOMPARE(page.toObject().value(u"width"_s).toInteger(), kPageWidth);
     QCOMPARE(page.toObject().value(u"height"_s).toInteger(), kPageHeight);
   }
-  QCOMPARE(events.at(1).at(0).toString(), u"render.invalidate"_s);
   bool progress = false;
   for (const auto &event : std::as_const(events)) {
     progress = progress || event.at(0).toString() == u"view.layout.progress"_s;
+    QVERIFY(event.at(0).toString() != u"render.invalidate"_s);
   }
   QVERIFY(progress);
+  // Another mode changes what every page shows: the engine raises the revision and invalidates every page.
+  events.clear();
+  QVERIFY(engine->post(u"view.set"_s, viewIn(u"draft"_s)));
+  QTRY_VERIFY(std::ranges::any_of(events, [](const QList<QVariant> &event) { return event.at(0).toString() == u"render.invalidate"_s; }));
+  for (const auto &event : std::as_const(events)) {
+    if (event.at(0).toString() == u"render.invalidate"_s) {
+      const QJsonObject payload = event.at(1).toJsonObject();
+      QCOMPARE(payload.value(u"revision"_s).toInteger(), 2);
+      QCOMPARE(payload.value(u"regions"_s).toArray().size(), pages.size());
+    }
+  }
 }
 
 void TestEngine::blobsRoundTrip() {
@@ -255,7 +283,7 @@ void TestEngine::tileShowsTheTestPage() {
   // The whole page at 100 %: 816 x 1056 device-independent pixels.
   const QSize size(static_cast<int>(kPageWidth / kBluPerDip), static_cast<int>(kPageHeight / kBluPerDip));
   QCOMPARE(size, QSize(816, 1056));
-  const QImage tile = engine->renderTile(pageRequest(0, 0, kPageWidth, kPageHeight), size);
+  const QImage tile = engine->renderTile(pageRequest(0, 0, kPageWidth, kPageHeight), size).image;
   QVERIFY(!tile.isNull());
   QCOMPARE(tile.size(), size);
   QCOMPARE(tile.format(), QImage::Format_RGBA8888_Premultiplied);
@@ -265,7 +293,7 @@ void TestEngine::tileShowsTheTestPage() {
   QCOMPARE(tile.pixelColor(200, 220), QColor(255, 255, 255)); // between lines
 
   // The same tile again gives exactly the same pixels (the engine is deterministic).
-  QCOMPARE(engine->renderTile(pageRequest(0, 0, kPageWidth, kPageHeight), size), tile);
+  QCOMPARE(engine->renderTile(pageRequest(0, 0, kPageWidth, kPageHeight), size).image, tile);
 }
 
 void TestEngine::tileOutsideThePageIsTransparent() {
@@ -275,7 +303,7 @@ void TestEngine::tileOutsideThePageIsTransparent() {
   const auto engine = openedEngine();
   QVERIFY(engine);
   // A tile whose left half lies beyond the page's left edge.
-  const QImage tile = engine->renderTile(pageRequest(-kPageWidth / 2, 0, kPageWidth, kPageHeight), QSize(200, 100));
+  const QImage tile = engine->renderTile(pageRequest(-kPageWidth / 2, 0, kPageWidth, kPageHeight), QSize(200, 100)).image;
   QVERIFY(!tile.isNull());
   QCOMPARE(tile.pixelColor(10, 10).alpha(), 0);              // beyond the page
   QCOMPARE(tile.pixelColor(110, 10), QColor(255, 255, 255)); // the page's left margin
@@ -286,22 +314,22 @@ void TestEngine::invalidTileRequestsAreRefused() {
   const auto engine = openedEngine();
   QVERIFY(engine);
   const QJsonObject valid = pageRequest(0, 0, kPageWidth, kPageHeight);
-  QVERIFY(engine->renderTile(valid, QSize(0, 10)).isNull());
-  QVERIFY(engine->renderTile(valid, QSize(10, -1)).isNull());
-  QVERIFY(engine->renderTile(valid, QSize(bayan::Engine::kMaxTileSide + 1, 10)).isNull());
-  QVERIFY(engine->renderTile(pageRequest(0, 0, 0, kPageHeight), QSize(10, 10)).isNull()); // empty rectangle
-  QVERIFY(engine->renderTile(pageRequest(0, 0, kPageWidth, -5), QSize(10, 10)).isNull()); // negative height
+  QVERIFY(engine->renderTile(valid, QSize(0, 10)).image.isNull());
+  QVERIFY(engine->renderTile(valid, QSize(10, -1)).image.isNull());
+  QVERIFY(engine->renderTile(valid, QSize(bayan::Engine::kMaxTileSide + 1, 10)).image.isNull());
+  QVERIFY(engine->renderTile(pageRequest(0, 0, 0, kPageHeight), QSize(10, 10)).image.isNull()); // empty rectangle
+  QVERIFY(engine->renderTile(pageRequest(0, 0, kPageWidth, -5), QSize(10, 10)).image.isNull()); // negative height
   QJsonObject otherPage = valid;
   otherPage.insert(u"page"_s, 7);
-  QVERIFY(engine->renderTile(otherPage, QSize(10, 10)).isNull());
+  QVERIFY(engine->renderTile(otherPage, QSize(10, 10)).image.isNull());
   QJsonObject otherDocument = valid;
   otherDocument.insert(u"doc_id"_s, 2);
-  QVERIFY(engine->renderTile(otherDocument, QSize(10, 10)).isNull());
+  QVERIFY(engine->renderTile(otherDocument, QSize(10, 10)).image.isNull());
 
   // Before any document is open, nothing can be rendered.
   const auto fresh = bayan::Engine::create();
   QVERIFY(fresh);
-  QVERIFY(fresh->renderTile(valid, QSize(10, 10)).isNull());
+  QVERIFY(fresh->renderTile(valid, QSize(10, 10)).image.isNull());
 }
 
 void TestEngine::deliveriesFromAnotherThreadArriveOnTheMainThread() {
@@ -344,15 +372,55 @@ void TestEngine::malformedEngineMessagesAreProtocolErrors() {
           .why = u"another protocol version"_s,
       },
       {
-          .json = R"({"v":0,"seq":1,"payload":{"doc_id":1,"pages_laid_out":1,"page_count_estimate":1,"complete":true}})"_ba,
+          .json =
+              R"({"v":0,"type":"view.layout.progress","seq":1,"payload":{"doc_id":1,"pages_laid_out":1,"page_count_estimate":1,"complete":true}})"_ba,
+          .brokenAt = u"/v"_s,
+          .why = u"version 0, which protocol v1 is not"_s,
+      },
+      {
+          .json =
+              R"({"v":"1","type":"view.layout.progress","seq":1,"payload":{"doc_id":1,"pages_laid_out":1,"page_count_estimate":1,"complete":true}})"_ba,
+          .brokenAt = u"/v"_s,
+          .why = u"a version that is not a number"_s,
+      },
+      {
+          .json = R"({"v":1,"seq":1,"payload":{"doc_id":1,"pages_laid_out":1,"page_count_estimate":1,"complete":true}})"_ba,
           .brokenAt = u"/type"_s,
           .why = u"no type, so neither an event nor a reply"_s,
       },
-      {.json = R"({"v":0,"re":0,"ok":true,"payload":{}})"_ba, .brokenAt = u"/re"_s, .why = u"an invalid request identifier"_s},
       {
-          .json = R"({"v":0,"re":3,"ok":"yes","error":{"code":"internal","message_id":"engine-error-internal","args":{}}})"_ba,
+          .json =
+              R"({"v":1,"type":"view.layout.progress","payload":{"doc_id":1,"pages_laid_out":1,"page_count_estimate":1,"complete":true}})"_ba,
+          .brokenAt = u"/seq"_s,
+          .why = u"an event without a sequence number"_s,
+      },
+      {
+          .json =
+              R"({"v":1,"type":"view.layout.progress","seq":0,"payload":{"doc_id":1,"pages_laid_out":1,"page_count_estimate":1,"complete":true}})"_ba,
+          .brokenAt = u"/seq"_s,
+          .why = u"a sequence number below 1"_s,
+      },
+      {
+          .json = R"({"v":1,"type":"view.layout.progress","seq":1,"payload":[1]})"_ba,
+          .brokenAt = u"/payload"_s,
+          .why = u"a payload that is not an object"_s,
+      },
+      {.json = R"({"v":1,"re":0,"ok":true,"payload":{}})"_ba, .brokenAt = u"/re"_s, .why = u"an invalid request identifier"_s},
+      {.json = R"({"v":1,"re":"3","ok":true,"payload":{}})"_ba, .brokenAt = u"/re"_s, .why = u"a request identifier that is a string"_s},
+      {
+          .json = R"({"v":1,"re":3,"ok":"yes","error":{"code":"internal","message_id":"engine-error-internal","args":{}}})"_ba,
           .brokenAt = u"/ok"_s,
           .why = u"ok is not a boolean"_s,
+      },
+      {
+          .json = R"({"v":1,"re":3,"ok":false,"error":"internal"})"_ba,
+          .brokenAt = u"/error"_s,
+          .why = u"an error that is not an object"_s,
+      },
+      {
+          .json = R"({"v":1,"re":3,"ok":false,"error":{"code":7,"message_id":"engine-error-internal","args":{}}})"_ba,
+          .brokenAt = u"/error/code"_s,
+          .why = u"an error code that is not a string"_s,
       },
   };
   for (const auto &[json, brokenAt, why] : malformed) {
@@ -363,7 +431,7 @@ void TestEngine::malformedEngineMessagesAreProtocolErrors() {
   QCOMPARE(replies.count(), 0);
 }
 
-void TestEngine::repliesMustAnswerPostedRequestsInOrder() {
+void TestEngine::repliesMustAnswerRequestsThatWaitForThem() {
   const auto engine = bayan::Engine::create();
   QVERIFY(engine);
   QSignalSpy errors(engine.get(), &bayan::Engine::protocolError);
@@ -383,6 +451,65 @@ void TestEngine::repliesMustAnswerPostedRequestsInOrder() {
   }
   QTRY_COMPARE(errors.count(), 3);
   QCOMPARE(replies.count(), answered);
+}
+
+void TestEngine::onlyTheReplyToHelloMayCarryAnotherVersion() {
+  if (!isStub()) {
+    QSKIP("Needs the stub's hello and doc_open test switches, so that the test answers those requests itself.");
+  }
+  // An engine that speaks other versions refuses hello in its own version (engine protocol §14.1 item 1): that reply is the one message
+  // whose v may differ. Replies need not come in the order of the requests, since nothing in the shell depends on it any more.
+  const QJsonObject refusal{
+      {u"code"_s, u"unsupported_protocol_version"_s},
+      {u"message_id"_s, u"engine-error-unsupported-protocol-version"_s},
+      {u"args"_s, QJsonObject{{u"supported"_s, QJsonArray{0}}}},
+  };
+  const auto v0Refusal = [&refusal](qint64 requestId) {
+    return QJsonDocument(QJsonObject{{u"v"_s, 0}, {u"re"_s, requestId}, {u"ok"_s, false}, {u"error"_s, refusal}})
+        .toJson(QJsonDocument::Compact);
+  };
+  const auto engine = bayan::Engine::create(QJsonObject{{u"test"_s, QJsonObject{{u"hello"_s, u"ignore"_s}}}});
+  QVERIFY(engine);
+  QSignalSpy errors(engine.get(), &bayan::Engine::protocolError);
+  QSignalSpy replies(engine.get(), &bayan::Engine::replyReceived);
+  const qint64 first = engine->request(u"hello"_s, helloPayload());
+  const qint64 second = engine->request(u"hello"_s, helloPayload());
+  QVERIFY(first > 0 && second > first);
+  QVERIFY(bayan::test::deliverMalformed(*engine, v0Refusal(second), u"/v"_s, u"the refusal of an engine that speaks version 0"_s));
+  QVERIFY(bayan::test::deliverMalformed(*engine, v0Refusal(first), u"/v"_s, u"the same, to the earlier hello"_s));
+  QTRY_COMPARE(replies.count(), 2);
+  QCOMPARE(replies.at(0).at(0).toLongLong(), second);
+  QCOMPARE(replies.at(1).at(0).toLongLong(), first);
+  QCOMPARE(replies.at(0).at(3).toJsonObject().value(u"code"_s).toString(), u"unsupported_protocol_version"_s);
+  QCOMPARE(errors.count(), 0);
+
+  // Another version on the reply to any other request breaks the protocol.
+  const auto opening = bayan::Engine::create(QJsonObject{{u"test"_s, QJsonObject{{u"doc_open"_s, u"ignore"_s}}}});
+  QVERIFY(opening);
+  QSignalSpy openingErrors(opening.get(), &bayan::Engine::protocolError);
+  QSignalSpy openingReplies(opening.get(), &bayan::Engine::replyReceived);
+  QVERIFY(waitForReply(openingReplies, opening->request(u"hello"_s, helloPayload())).value(1).toBool());
+  const qint64 open = opening->request(u"doc.open"_s, QJsonObject{{u"blob"_s, static_cast<qint64>(opening->putBlob(QByteArray()))}});
+  QVERIFY(open > 0);
+  QVERIFY(bayan::test::deliverMalformed(*opening, v0Refusal(open), u"/v"_s, u"version 0 on the reply to doc.open"_s));
+  QTRY_COMPARE(openingErrors.count(), 1);
+  QCOMPARE(openingReplies.count(), 1);
+}
+
+void TestEngine::tilesCarryTheirRevision() {
+  // Every tile reports the render revision it shows (engine protocol §14.6): 1 when the document opens, 2 after a new mode.
+  const auto engine = openedEngine();
+  QVERIFY(engine);
+  const QSize size(8, 8);
+  const bayan::Engine::Tile first = engine->renderTile(pageRequest(0, 0, kPageWidth, kPageHeight), size);
+  QVERIFY(!first.image.isNull());
+  QCOMPARE(first.revision, quint64{1});
+  QVERIFY(engine->post(u"view.set"_s, viewIn(u"draft"_s)));
+  const bayan::Engine::Tile second = engine->renderTile(pageRequest(0, 0, kPageWidth, kPageHeight), size);
+  QVERIFY(!second.image.isNull());
+  QCOMPARE(second.revision, quint64{2});
+  // A refused tile has no revision.
+  QCOMPARE(engine->renderTile(pageRequest(0, 0, 0, kPageHeight), size).revision, quint64{0});
 }
 
 void TestEngine::oversizedEngineMessagesAreRejected() {
@@ -495,7 +622,7 @@ void TestEngine::diagPanicNeedsTheTestSwitch() {
 void TestEngine::aPanicDiscardsTheSession() {
   // What the shell's recovery relies on, from the stub as from the real engine (engine protocol §12): the message that panicked is answered
   // with the error panic, then engine.error says that the session is gone, and the next message other than hello needs a new handshake.
-  const auto engine = openedEngine(QJsonObject{{u"test"_s, QJsonObject{{u"allow_panic"_s, true}}}});
+  const auto engine = openedEngine(allowPanic());
   QVERIFY(engine);
   QSignalSpy replies(engine.get(), &bayan::Engine::replyReceived);
   QSignalSpy events(engine.get(), &bayan::Engine::eventReceived);
@@ -504,6 +631,9 @@ void TestEngine::aPanicDiscardsTheSession() {
   QVERIFY(!reply.at(1).toBool());
   QCOMPARE(reply.at(3).toJsonObject().value(u"code"_s).toString(), u"panic"_s);
   QTRY_VERIFY(std::ranges::any_of(events, isUnrecoverableError));
+  // The engine.error says which restart follows (§14.2): the first of three.
+  const auto error = std::ranges::find_if(events, isUnrecoverableError);
+  QCOMPARE(error->at(1).toJsonObject().value(u"restart"_s).toObject(), (QJsonObject{{u"number"_s, 1}, {u"limit"_s, 3}}));
   const QList<QVariant> after = waitForReply(replies, engine->request(u"doc.open"_s, QJsonObject{{u"blob"_s, 1}}));
   QVERIFY(!after.isEmpty());
   QCOMPARE(after.at(3).toJsonObject().value(u"code"_s).toString(), u"handshake_required"_s);
@@ -517,7 +647,7 @@ void TestEngine::aPanicDiscardsTheSession() {
 void TestEngine::requestsOfOneTypeCanBeSentAsPanics() {
   // The recovery tests' hook: a request of the chosen type goes out as diag.panic with its own identifier, so the engine answers that very
   // request with the error panic.
-  const auto engine = bayan::Engine::create(QJsonObject{{u"test"_s, QJsonObject{{u"allow_panic"_s, true}}}});
+  const auto engine = bayan::Engine::create(allowPanic());
   QVERIFY(engine);
   QSignalSpy replies(engine.get(), &bayan::Engine::replyReceived);
   QVERIFY(waitForReply(replies, engine->request(u"hello"_s, helloPayload())).value(1).toBool());

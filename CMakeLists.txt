@@ -46,6 +46,6 @@ list(REMOVE_ITEM lint_headers "${PROJECT_SOURCE_DIR}/src/engine/stub/include/bay
 set(lint_build_targets bayan-desktop)
 if(BAYAN_BUILD_TESTS)
   list(APPEND lint_build_targets tst_engine tst_documentsession tst_canvas tst_interface tst_protocol tst_tiles tst_input tst_accessibletext
-       tst_restartallowance tst_protocolschema tst_cinterface)
+       tst_conformance tst_protocolschema tst_cinterface)
 endif()
 bayan_add_lint_targets(SOURCES ${lint_sources} HEADERS ${lint_headers} BUILD_TARGETS ${lint_build_targets})

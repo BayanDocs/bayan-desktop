@@ -27,14 +27,16 @@ qt_add_qml_module(bayan_shell
     app/documentsession.h
     app/pixelprobe.cpp
     app/pixelprobe.h
-    app/restartallowance.cpp
-    app/restartallowance.h
+    app/sessiontracker.cpp
+    app/sessiontracker.h
     canvas/canvasnode.cpp
     canvas/canvasnode.h
     canvas/documentcanvas.cpp
     canvas/documentcanvas.h
     canvas/imetranslator.cpp
     canvas/imetranslator.h
+    canvas/keybindings.cpp
+    canvas/keybindings.h
     canvas/keymapping.cpp
     canvas/keymapping.h
     canvas/tilecache.cpp

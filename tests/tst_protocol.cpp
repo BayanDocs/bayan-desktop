@@ -80,6 +80,9 @@ private slots:
   void pagesCountFromZeroWithSaneSizes();
   void regionsMustNameExistingPages();
   void overlaysHaveACaretOrNullAndSelectionsPerPage();
+  void welcomesAreReadFieldByField();
+  void manifestKeysAreReadAsTheEngineGivesThem();
+  void nodesMayHoldAPartOfTheirChildren();
   void readsAnAccessibilityTree();
   void refusesMalformedAccessibilityTrees();
   void caretIsAPositionOrNull();
@@ -144,6 +147,17 @@ void TestProtocol::overlaysHaveACaretOrNullAndSelectionsPerPage() {
   const QJsonArray selection{QJsonObject{{u"page"_s, 1}, {u"rects"_s, QJsonArray{rect(0, 0, 1, 1), rect(2, 0, 1, 1)}}}};
   QVERIFY(matches(caret, u"Caret"_s));
   QVERIFY(matches(selection.at(0), u"SelectionRects"_s));
+  // An overlay.update payload with these fields, its render revision and the remote cursors and highlights of later phases (§14.6).
+  const auto overlay = [](const QJsonObject &fields) {
+    QJsonObject payload{{u"revision"_s, 7}, {u"remote"_s, QJsonArray{}}, {u"highlights"_s, QJsonArray{}}};
+    for (auto field = fields.begin(); field != fields.end(); ++field) {
+      payload.insert(field.key(), field.value());
+    }
+    return payload;
+  };
+  QJsonObject sample = overlay(QJsonObject{{u"caret"_s, caret}, {u"selection"_s, selection}});
+  sample.insert(u"doc_id"_s, 1);
+  QVERIFY(matches(sample, u"OverlayUpdate"_s));
   const Overlay expected{
       .caret = Caret{.page = 0, .rect = {.x = 1, .y = 2, .width = 3, .height = 4}, .visible = true},
       .selection =
@@ -152,16 +166,242 @@ void TestProtocol::overlaysHaveACaretOrNullAndSelectionsPerPage() {
               {.page = 1, .rect = {.x = 2, .y = 0, .width = 1, .height = 1}},
           },
   };
-  QCOMPARE(parseOverlay(QJsonObject{{u"caret"_s, caret}, {u"selection"_s, selection}}, 2), expected);
-  QCOMPARE(parseOverlay(QJsonObject{{u"caret"_s, QJsonValue::Null}, {u"selection"_s, QJsonArray{}}}, 1), Overlay{});
+  QCOMPARE(parseOverlay(overlay(QJsonObject{{u"caret"_s, caret}, {u"selection"_s, selection}}), 2), expected);
+  QCOMPARE(parseOverlay(overlay(QJsonObject{{u"caret"_s, QJsonValue::Null}, {u"selection"_s, QJsonArray{}}}), 1), Overlay{});
 
   QJsonObject hidden = caret;
   hidden.remove(u"visible"_s);
-  QVERIFY(!parseOverlay(QJsonObject{{u"caret"_s, hidden}, {u"selection"_s, QJsonArray{}}}, 1));
-  QVERIFY(!parseOverlay(QJsonObject{{u"caret"_s, caret}, {u"selection"_s, QJsonArray{}}}, 0)); // no such page
-  QVERIFY(!parseOverlay(QJsonObject{{u"caret"_s, QJsonValue::Null}}, 1));                      // no selection
-  QVERIFY(!parseOverlay(QJsonObject{{u"selection"_s, QJsonArray{}}}, 1));                      // caret missing, not null
-  QVERIFY(!parseOverlay(QJsonObject{{u"caret"_s, QJsonValue::Null}, {u"selection"_s, selection}}, 1));
+  QVERIFY(!parseOverlay(overlay(QJsonObject{{u"caret"_s, hidden}, {u"selection"_s, QJsonArray{}}}), 1));
+  QVERIFY(!parseOverlay(overlay(QJsonObject{{u"caret"_s, caret}, {u"selection"_s, QJsonArray{}}}), 0)); // no such page
+  QVERIFY(!parseOverlay(overlay(QJsonObject{{u"caret"_s, QJsonValue::Null}}), 1));                      // no selection
+  QVERIFY(!parseOverlay(overlay(QJsonObject{{u"selection"_s, QJsonArray{}}}), 1));                      // caret missing, not null
+  QVERIFY(!parseOverlay(overlay(QJsonObject{{u"caret"_s, QJsonValue::Null}, {u"selection"_s, selection}}), 1));
+  // The revision is a positive integer below 2^53, and the lists of later phases are there.
+  const QJsonObject empty{{u"caret"_s, QJsonValue::Null}, {u"selection"_s, QJsonArray{}}};
+  for (const QJsonValue &revision :
+       {QJsonValue(0), QJsonValue(-1), QJsonValue(1.5), QJsonValue(9'007'199'254'740'992.0), QJsonValue(u"7"_s)}) {
+    QJsonObject payload = overlay(empty);
+    payload.insert(u"revision"_s, revision);
+    QVERIFY(!parseOverlay(payload, 1));
+  }
+  for (const QString &field : {u"revision"_s, u"remote"_s, u"highlights"_s}) {
+    QJsonObject payload = overlay(empty);
+    payload.remove(field);
+    QVERIFY2(!parseOverlay(payload, 1), qPrintable(field));
+  }
+}
+
+void TestProtocol::welcomesAreReadFieldByField() {
+  // welcome (engine protocol §5, §14.1): the version the engine speaks, its version of at most 64 printable ASCII characters (item 6), the
+  // layout epoch and the features.
+  const QJsonObject welcome{
+      {u"protocol_version"_s, 1},
+      {u"engine_version"_s, u"1.2.3-alpha.1+build.5"_s},
+      {u"layout_epoch"_s, 4},
+      {u"features"_s, QJsonArray{u"mock_document"_s}},
+  };
+  QVERIFY(matches(welcome, u"Welcome"_s));
+  const auto parsed = parseWelcome(welcome);
+  if (!parsed) {
+    QFAIL("the sample was refused");
+  }
+  QCOMPARE(parsed->protocolVersion, 1);
+  QCOMPARE(parsed->engineVersion, u"1.2.3-alpha.1+build.5"_s);
+  QCOMPARE(parsed->layoutEpoch, 4);
+  QCOMPARE(parsed->features, QStringList{u"mock_document"_s});
+  const auto with = [&welcome](const QString &field, const QJsonValue &value) {
+    QJsonObject changed = welcome;
+    if (value.isUndefined()) {
+      changed.remove(field);
+    } else {
+      changed.insert(field, value);
+    }
+    return parseWelcome(changed).has_value();
+  };
+  QVERIFY(with(u"engine_version"_s, QString(64, u'1')));
+  QVERIFY(!with(u"engine_version"_s, QString(65, u'1')));
+  QVERIFY(!with(u"engine_version"_s, u""_s));
+  QVERIFY(!with(u"engine_version"_s, u"1.0\n"_s));
+  QVERIFY(!with(u"engine_version"_s, u"1.0.0-\u00e9"_s));
+  QVERIFY(!with(u"engine_version"_s, 1));
+  QVERIFY(!with(u"protocol_version"_s, -1));
+  QVERIFY(!with(u"protocol_version"_s, 1.5));
+  QVERIFY(!with(u"layout_epoch"_s, -1));
+  QVERIFY(!with(u"features"_s, QJsonArray{1}));
+  for (const QString &field : {u"protocol_version"_s, u"engine_version"_s, u"layout_epoch"_s, u"features"_s}) {
+    QVERIFY2(!with(field, QJsonValue(QJsonValue::Undefined)), qPrintable(field));
+  }
+}
+
+void TestProtocol::manifestKeysAreReadAsTheEngineGivesThem() {
+  // The key data of the UI manifest (engine protocol §6.8, §14.3): bindings with all four modifiers and the engine's label, document keys
+  // by key, and reserved keys by key or code with the modifiers that matter.
+  const QJsonObject bold{
+      {u"key"_s, u"b"_s}, {u"ctrl"_s, true}, {u"shift"_s, false}, {u"alt"_s, false}, {u"meta"_s, false}, {u"label"_s, u"Ctrl+B"_s},
+  };
+  const QJsonObject copy{
+      {u"code"_s, u"KeyC"_s}, {u"ctrl"_s, true}, {u"shift"_s, false}, {u"alt"_s, false}, {u"meta"_s, false}, {u"label"_s, u"Ctrl+C"_s},
+  };
+  const QJsonArray commands{
+      QJsonObject{{u"id"_s, u"format.bold.toggle"_s}, {u"label"_s, u"Bold"_s}, {u"bindings"_s, QJsonArray{bold}}},
+      QJsonObject{{u"id"_s, u"edit.copy"_s}, {u"label"_s, u"Copy"_s}, {u"bindings"_s, QJsonArray{copy}}, {u"shell_action"_s, u"copy"_s}},
+  };
+  const QJsonObject keys{
+      {u"document"_s, QJsonArray{QJsonObject{{u"key"_s, u"Backspace"_s}}}},
+      {u"reserved"_s, QJsonArray{QJsonObject{{u"key"_s, u"Tab"_s}}, QJsonObject{{u"code"_s, u"KeyV"_s}, {u"ctrl"_s, true}}}},
+  };
+  const QJsonObject manifest{
+      {u"manifest_version"_s, 0},
+      {u"locale"_s, u"en-US"_s},
+      {u"commands"_s, commands},
+      {u"keys"_s, keys},
+      {u"ribbon"_s, QJsonObject{{u"tabs"_s, QJsonArray{}}}},
+  };
+  QVERIFY(matches(manifest, u"UiManifest"_s));
+  const auto parsed = parseUiManifest(manifest);
+  if (!parsed) {
+    QFAIL("the sample was refused");
+  }
+  QCOMPARE(parsed->commands.size(), std::size_t{2});
+  const ManifestCommand &first = parsed->commands.at(0);
+  QCOMPARE(first.id, u"format.bold.toggle"_s);
+  QVERIFY(!first.shellAction);
+  QCOMPARE(first.bindings,
+           (std::vector<KeyEntry>{
+               {.key = u"b"_s, .code = {}, .ctrl = true, .shift = false, .alt = false, .meta = false, .label = u"Ctrl+B"_s}}));
+  QCOMPARE(parsed->commands.at(1).shellAction, std::optional<QString>(u"copy"_s));
+  QCOMPARE(parsed->commands.at(1).bindings.at(0).code, u"KeyC"_s);
+  const auto entry = [](const QString &key, const QString &code, std::optional<bool> ctrl = std::nullopt) {
+    return KeyEntry{.key = key, .code = code, .ctrl = ctrl, .shift = std::nullopt, .alt = std::nullopt, .meta = std::nullopt, .label = {}};
+  };
+  QCOMPARE(parsed->documentKeys, std::vector<KeyEntry>{entry(u"Backspace"_s, {})});
+  QCOMPARE(parsed->reservedKeys, (std::vector<KeyEntry>{entry(u"Tab"_s, {}), entry({}, u"KeyV"_s, true)}));
+
+  // Each entry names its key exactly once; a binding has all four modifiers and a label.
+  const auto withBinding = [&manifest](const QJsonObject &binding) {
+    QJsonObject changed = manifest;
+    changed.insert(u"commands"_s, QJsonArray{QJsonObject{{u"id"_s, u"x"_s}, {u"label"_s, u"X"_s}, {u"bindings"_s, QJsonArray{binding}}}});
+    return parseUiManifest(changed).has_value();
+  };
+  QVERIFY(withBinding(bold));
+  QJsonObject both = bold;
+  both.insert(u"code"_s, u"KeyB"_s);
+  QVERIFY(!withBinding(both));
+  for (const QString &field : {u"key"_s, u"ctrl"_s, u"shift"_s, u"alt"_s, u"meta"_s, u"label"_s}) {
+    QJsonObject missing = bold;
+    missing.remove(field);
+    QVERIFY2(!withBinding(missing), qPrintable(field));
+  }
+  QJsonObject empty = bold;
+  empty.insert(u"key"_s, u""_s);
+  QVERIFY(!withBinding(empty));
+  const auto withKeys = [&manifest](const QString &list, const QJsonObject &item) {
+    QJsonObject changed = manifest;
+    QJsonObject lists = changed.value(u"keys"_s).toObject();
+    lists.insert(list, QJsonArray{item});
+    changed.insert(u"keys"_s, lists);
+    return parseUiManifest(changed).has_value();
+  };
+  QVERIFY(!withKeys(u"document"_s, QJsonObject{{u"code"_s, u"KeyA"_s}}));
+  QVERIFY(!withKeys(u"reserved"_s, QJsonObject{{u"key"_s, u"Tab"_s}, {u"ctrl"_s, u"yes"_s}}));
+  QVERIFY(!withKeys(u"reserved"_s, QJsonObject{{u"key"_s, u"Tab"_s}, {u"code"_s, u"Tab"_s}}));
+  for (const QString &field : {u"manifest_version"_s, u"locale"_s, u"commands"_s, u"keys"_s, u"ribbon"_s}) {
+    QJsonObject missing = manifest;
+    missing.remove(field);
+    QVERIFY2(!parseUiManifest(missing), qPrintable(field));
+  }
+}
+
+void TestProtocol::nodesMayHoldAPartOfTheirChildren() {
+  // A node with more children than one message holds gives child_count and, unless its run starts at the first child, children_start
+  // (engine protocol §14.7 item 1). The tree knows which children it lacks, and takes the parts that query.a11y loads.
+  const auto paragraph = [](int id) { return QJsonObject{{u"id"_s, id}, {u"role"_s, u"paragraph"_s}, {u"text"_s, u"P%1"_s.arg(id)}}; };
+  const auto document = [&paragraph](int count, int start, const std::vector<int> &ids) {
+    QJsonArray children;
+    for (const int id : ids) {
+      children.append(paragraph(id));
+    }
+    QJsonObject node{{u"id"_s, 1}, {u"role"_s, u"document"_s}, {u"child_count"_s, count}, {u"children"_s, children}};
+    if (start > 0) {
+      node.insert(u"children_start"_s, start);
+    }
+    return node;
+  };
+  QVERIFY(matches(document(6, 2, {4, 5}), u"A11yNode"_s));
+  // The first two of six children: four are missing, from the third on.
+  auto tree = parseAccessibleTree(document(6, 0, {2, 3}), 1);
+  if (!tree) {
+    QFAIL("the tree was refused");
+  }
+  QCOMPARE(tree->root().childCount, std::optional<quint32>(6));
+  QCOMPARE(tree->root().childIndices, (std::vector<quint32>{0, 1}));
+  QCOMPARE(tree->missingChildren(), (std::vector<MissingChildren>{{.node = 1, .start = 2, .count = 4}}));
+  // A part with the third and fourth children; then one with the last two. Once the tree holds all six, nothing is missing.
+  const auto middle = parseAccessibleTree(document(6, 2, {4, 5}), 1);
+  if (!middle) {
+    QFAIL("the middle part was refused");
+  }
+  QVERIFY(tree->addChildren(*middle));
+  QCOMPARE(tree->missingChildren(), (std::vector<MissingChildren>{{.node = 1, .start = 4, .count = 2}}));
+  const auto last = parseAccessibleTree(document(6, 4, {6, 7}), 1);
+  if (!last) {
+    QFAIL("the last part was refused");
+  }
+  QVERIFY(tree->addChildren(*last));
+  QVERIFY(tree->missingChildren().empty());
+  QCOMPARE(tree->root().children, (std::vector<quint64>{2, 3, 4, 5, 6, 7}));
+  QVERIFY(!tree->root().childCount);
+  std::vector<quint64> order;
+  for (const AccessibleNode *node : tree->readingOrder()) {
+    order.push_back(node->id);
+  }
+  QCOMPARE(order, (std::vector<quint64>{1, 2, 3, 4, 5, 6, 7}));
+  // A run in the middle leaves a gap before it and one after it.
+  const auto gaps = parseAccessibleTree(document(5, 2, {4}), 1);
+  if (!gaps) {
+    QFAIL("the tree with gaps was refused");
+  }
+  QCOMPARE(gaps->missingChildren(),
+           (std::vector<MissingChildren>{{.node = 1, .start = 0, .count = 2}, {.node = 1, .start = 3, .count = 2}}));
+  // A node with child_count and no children holds none of them; one whose run covers all of them holds them all.
+  QJsonObject none{{u"id"_s, 1}, {u"role"_s, u"document"_s}, {u"child_count"_s, 3}};
+  const auto withNone = parseAccessibleTree(none, 1);
+  if (!withNone) {
+    QFAIL("the tree without children was refused");
+  }
+  QCOMPARE(withNone->missingChildren(), (std::vector<MissingChildren>{{.node = 1, .start = 0, .count = 3}}));
+  const auto all = parseAccessibleTree(document(2, 0, {2, 3}), 1);
+  if (!all) {
+    QFAIL("the tree with all its children was refused");
+  }
+  QVERIFY(!all->root().childCount && all->missingChildren().empty());
+  // More children than the node says it has, a run beyond them, or counts out of range break the protocol.
+  QVERIFY(!parseAccessibleTree(document(1, 0, {2, 3}), 1));
+  QVERIFY(!parseAccessibleTree(document(3, 2, {4, 5}), 1));
+  QJsonObject negative = document(3, 0, {2});
+  negative.insert(u"child_count"_s, -1);
+  QVERIFY(!parseAccessibleTree(negative, 1));
+  QJsonObject huge = document(3, 0, {2});
+  huge.insert(u"children_start"_s, 4'294'967'296.0);
+  QVERIFY(!parseAccessibleTree(huge, 1));
+  // A part for a node that is not in the tree, or that reuses an identifier from elsewhere, changes nothing.
+  auto other = parseAccessibleTree(document(6, 0, {2, 3}), 1);
+  if (!other) {
+    QFAIL("the second tree was refused");
+  }
+  QJsonObject stranger = document(6, 2, {4, 5});
+  stranger.insert(u"id"_s, 99);
+  const auto strangerPart = parseAccessibleTree(stranger, 1);
+  if (!strangerPart) {
+    QFAIL("the stranger's part was refused");
+  }
+  QVERIFY(!other->addChildren(*strangerPart));
+  const auto reused = parseAccessibleTree(document(6, 2, {3, 4}), 1);
+  if (!reused) {
+    QFAIL("the part with a reused identifier was refused");
+  }
+  QVERIFY(!other->addChildren(*reused));
+  QCOMPARE(other->missingChildren(), (std::vector<MissingChildren>{{.node = 1, .start = 2, .count = 4}}));
 }
 
 void TestProtocol::readsAnAccessibilityTree() {

@@ -54,13 +54,12 @@ void TileRenderer::run() {
       rendering_ = job.key;
     }
     const Clock::time_point started = Clock::now();
-    // Read before rendering: every request posted up to this one is handled before the tile (see Engine::lastPostedRequest).
-    const qint64 renderedAfter = engine_.lastPostedRequest();
-    QImage image = engine_.renderTile(job.request, job.pixels);
+    Engine::Tile tile = engine_.renderTile(job.request, job.pixels);
     Result result{
         .key = job.key,
-        .image = std::move(image),
-        .renderedAfter = renderedAfter,
+        .image = std::move(tile.image),
+        .revision = tile.revision,
+        .generation = job.generation,
         .wanted = job.wanted,
         .started = started,
         .finished = Clock::now(),

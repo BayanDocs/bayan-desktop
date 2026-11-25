@@ -47,7 +47,8 @@ std::vector<ImeAction> ImeTranslator::translate(const QInputMethodEvent &event) 
   const int replaceLength = event.replacementLength();
 
   // Text around the caret to replace. Qt counts from the caret (negative: before it). A range that starts after the caret cannot be
-  // reached with Backspace and Delete alone; protocol v0 has no way to say it, so it is left out (the DESK-002 report lists the gap).
+  // reached with Backspace and Delete alone, and the engine at the pinned core cannot take it yet (engine protocol §14.4 adds it: CORE-014,
+  // DESK-005), so it is left out (the DESK-002 report lists the gap).
   if (replaceLength > 0 && replaceFrom <= 0) {
     if (composing_) {
       actions.push_back({.kind = ImeAction::Kind::End});

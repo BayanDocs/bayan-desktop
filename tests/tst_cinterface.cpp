@@ -1,10 +1,11 @@
 // Tests of the engine's C interface (bayan_ffi.h) itself, against the engine the build links: the stub (BAYAN_ENGINE=stub) or the real
 // engine of bayan-core's C SDK (BAYAN_ENGINE=sdk). They call the C functions directly, with a callback of their own, to check what
 // bayan_ffi.h documents, which the stub must do as the real engine does: bayan_render_tile returns BAYAN_STATUS_WRONG_THREAD inside any
-// engine's callback, renders the tile after the messages posted before it, and an engine freed from inside its own callback delivers
-// nothing more. They also check every message the engine sends in a conversation that reaches every kind of message it has against the
-// protocol's JSON Schema: for the stub, that it sends only messages the real engine could send; for the real engine, that the tests'
-// checker accepts what the engine really sends.
+// engine's callback, renders the tile after the messages posted before it and reports the render revision it shows, an engine freed from
+// inside its own callback delivers nothing more, and an engine whose restarts are used up has stopped (engine protocol §14.2). They also
+// check every message the engine sends in a conversation that reaches every kind of message it has against the protocol's JSON Schema: for
+// the stub, that it sends only messages the real engine could send; for the real engine, that the tests' checker accepts what the engine
+// really sends.
 
 #include "bayan_ffi.h"
 #include "protocolschema.h"
@@ -24,6 +25,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <utility>
 #include <vector>
 
 using namespace Qt::StringLiterals;
@@ -55,16 +57,36 @@ QJsonObject tileRequest() {
   };
 }
 
-// Renders the tile of tileRequest(), 8 × 8 pixels, and returns the status.
-BayanStatus renderTile(BayanEngine *engine) {
+// Renders the tile of tileRequest(), 8 × 8 pixels, and returns the status; revision, if given, receives the render revision it shows.
+BayanStatus renderTile(BayanEngine *engine, std::uint64_t *revision = nullptr) {
   constexpr std::uint32_t kSide = 8;
   std::vector<std::uint8_t> pixels(std::size_t{kSide} * kSide * 4);
   const QByteArray request = compact(tileRequest());
   return bayan_render_tile(engine, bytesOf(request), static_cast<std::size_t>(request.size()), pixels.data(), pixels.size(), kSide, kSide,
-                           std::size_t{kSide} * 4);
+                           std::size_t{kSide} * 4, revision);
 }
 
-QJsonObject helloPayload() { return QJsonObject{{u"protocol_versions"_s, QJsonArray{0}}}; }
+QJsonObject helloPayload() { return QJsonObject{{u"protocol_versions"_s, QJsonArray{1}}}; }
+
+// A view.set of document 1 in a mode, at zoom 1.
+QJsonObject viewIn(const QString &mode) {
+  const QJsonObject viewport{{u"x"_s, 0}, {u"y"_s, 0}, {u"width"_s, 800}, {u"height"_s, 600}};
+  return QJsonObject{
+      {u"doc_id"_s, 1},         {u"viewport"_s, viewport}, {u"zoom"_s, 1.0},
+      {u"device_scale"_s, 1.0}, {u"mode"_s, mode},         {u"show_formatting_marks"_s, false},
+  };
+}
+
+// The configuration that lets diag.panic make the engine fail, with, for the stub, the restart values that the real engine's binding gives
+// four failures within ten minutes: the stub counts nothing (engine protocol §14.2).
+QJsonObject allowPanic() {
+  QJsonObject test{{u"allow_panic"_s, true}};
+  if (isStub()) {
+    const auto restart = [](int number) { return QJsonObject{{u"number"_s, number}, {u"limit"_s, 3}}; };
+    test.insert(u"restarts"_s, QJsonArray{restart(1), restart(2), restart(3), QJsonValue::Null});
+  }
+  return QJsonObject{{u"test"_s, test}};
+}
 
 // The identifier of the view.set request in freeingInsideTheCallbackDeliversNothingMore, after hello (1) and doc.open (2).
 constexpr qint64 kViewRequest = 3;
@@ -99,7 +121,7 @@ public:
   // Posts a request and returns its identifier, or 0 if the engine refused it; remembers its type, so that its reply can be checked.
   qint64 request(const QString &type, const QJsonObject &payload = {}) {
     const qint64 id = nextId_++;
-    if (!postBytes(compact(QJsonObject{{u"v"_s, 0}, {u"id"_s, id}, {u"type"_s, type}, {u"payload"_s, payload}}))) {
+    if (!postBytes(compact(QJsonObject{{u"v"_s, 1}, {u"id"_s, id}, {u"type"_s, type}, {u"payload"_s, payload}}))) {
       return 0;
     }
     const std::scoped_lock lock(mutex_);
@@ -112,7 +134,7 @@ public:
     return postBytes(compact(envelope)) ? id : 0;
   }
   bool post(const QString &type, const QJsonObject &payload = {}) {
-    return postBytes(compact(QJsonObject{{u"v"_s, 0}, {u"type"_s, type}, {u"payload"_s, payload}}));
+    return postBytes(compact(QJsonObject{{u"v"_s, 1}, {u"type"_s, type}, {u"payload"_s, payload}}));
   }
   bool postBytes(const QByteArray &json) {
     return bayan_engine_post(engine_, bytesOf(json), static_cast<std::size_t>(json.size())) == BAYAN_STATUS_OK;
@@ -188,7 +210,9 @@ private slots:
   void theHeaderHasTheStatusesOfTheRealEngine();
   void renderTileReturnsWrongThreadInsideAnyCallback();
   void tilesAreRenderedAfterThePostedMessages();
+  void tilesCarryTheRenderRevision();
   void freeingInsideTheCallbackDeliversNothingMore();
+  void theEngineStopsAfterItsLastRestart();
   void everyMessageOfTheEngineMatchesTheSchema();
 };
 
@@ -213,7 +237,7 @@ void TestCInterface::renderTileReturnsWrongThreadInsideAnyCallback() {
     if (message.value(u"re"_s).toInteger(0) == 1) {
       ownStatus = renderTile(self);
       otherStatus = renderTile(other.get());
-      const QByteArray json = compact(QJsonObject{{u"v"_s, 0}, {u"type"_s, u"no.such.message"_s}});
+      const QByteArray json = compact(QJsonObject{{u"v"_s, 1}, {u"type"_s, u"no.such.message"_s}});
       postStatus = bayan_engine_post(self, bytesOf(json), static_cast<std::size_t>(json.size()));
     }
   };
@@ -248,9 +272,75 @@ void TestCInterface::tilesAreRenderedAfterThePostedMessages() {
   QCOMPARE(bayan_blob_release(engine.get(), blob), BAYAN_STATUS_OK);
 }
 
+void TestCInterface::tilesCarryTheRenderRevision() {
+  // Every tile reports the render revision it shows (engine protocol §14.6): a document opens at revision 1 in print mode; a view.set that
+  // only changes the viewport changes nothing that tiles show, and one that changes the mode raises the revision and invalidates. The NULL
+  // that the header allows for revision_out is accepted.
+  RawEngine engine;
+  QVERIFY(engine.get() != nullptr);
+  QVERIFY(succeeds(engine, engine.request(u"hello"_s, helloPayload())));
+  const auto blob = static_cast<qint64>(bayan_blob_put(engine.get(), nullptr, 0));
+  const QJsonObject opened = engine.waitForReply(engine.request(u"doc.open"_s, QJsonObject{{u"blob"_s, blob}}));
+  QCOMPARE(opened.value(u"payload"_s).toObject().value(u"revision"_s).toInteger(), 1);
+  std::uint64_t revision = 0;
+  QCOMPARE(renderTile(engine.get(), &revision), BAYAN_STATUS_OK);
+  QCOMPARE(revision, std::uint64_t{1});
+  QVERIFY(succeeds(engine, engine.request(u"view.set"_s, viewIn(u"print"_s))));
+  QCOMPARE(renderTile(engine.get(), &revision), BAYAN_STATUS_OK);
+  QCOMPARE(revision, std::uint64_t{1});
+  const qint64 draft = engine.request(u"view.set"_s, viewIn(u"draft"_s));
+  QCOMPARE(renderTile(engine.get(), &revision), BAYAN_STATUS_OK);
+  QCOMPARE(revision, std::uint64_t{2});
+  QVERIFY(succeeds(engine, draft));
+  const QJsonObject invalidation =
+      engine.waitFor([](const QJsonObject &message) { return message.value(u"type"_s) == u"render.invalidate"_s; });
+  QCOMPARE(invalidation.value(u"payload"_s).toObject().value(u"revision"_s).toInteger(), 2);
+  // Only the mode's change invalidated anything.
+  int invalidations = 0;
+  for (const QJsonObject &message : engine.received()) {
+    invalidations += message.value(u"type"_s) == u"render.invalidate"_s ? 1 : 0;
+  }
+  QCOMPARE(invalidations, 1);
+  QCOMPARE(renderTile(engine.get(), nullptr), BAYAN_STATUS_OK);
+  QCOMPARE(bayan_blob_release(engine.get(), static_cast<BayanBlobId>(blob)), BAYAN_STATUS_OK);
+}
+
+void TestCInterface::theEngineStopsAfterItsLastRestart() {
+  // The binding counts the restarts (engine protocol §14.2): the first three failures within ten minutes ask for restarts 1 to 3 of 3, and
+  // the fourth carries restart null. Then the engine has stopped: posting and rendering return BAYAN_STATUS_INTERNAL_ERROR, and the
+  // callback is not called again. The stub takes the values from its test switch, so that the rule is written only in the engine.
+  RawEngine engine(allowPanic());
+  QVERIFY(engine.get() != nullptr);
+  QList<QJsonValue> restarts;
+  for (int failure = 1; failure <= 4; ++failure) {
+    QVERIFY(succeeds(engine, engine.request(u"hello"_s, helloPayload())));
+    QVERIFY(engine.request(u"diag.panic"_s) > 0);
+    const QJsonObject error = engine.waitFor([&restarts](const QJsonObject &message) {
+      return message.value(u"type"_s) == u"engine.error"_s &&
+             message.value(u"payload"_s).toObject().value(u"recoverable"_s) == QJsonValue(false) &&
+             std::cmp_greater(message.value(u"seq"_s).toInteger(), restarts.size());
+    });
+    QVERIFY2(!error.isEmpty(), qPrintable(u"failure %1"_s.arg(failure)));
+    restarts.append(error.value(u"payload"_s).toObject().value(u"restart"_s));
+    if (restarts.last().isNull()) {
+      break;
+    }
+  }
+  const auto restart = [](int number) { return QJsonValue(QJsonObject{{u"number"_s, number}, {u"limit"_s, 3}}); };
+  QCOMPARE(restarts, (QList<QJsonValue>{restart(1), restart(2), restart(3), QJsonValue(QJsonValue::Null)}));
+  const QByteArray hello =
+      compact(QJsonObject{{u"v"_s, 1}, {u"id"_s, engine.takeId()}, {u"type"_s, u"hello"_s}, {u"payload"_s, helloPayload()}});
+  QCOMPARE(bayan_engine_post(engine.get(), bytesOf(hello), static_cast<std::size_t>(hello.size())), BAYAN_STATUS_INTERNAL_ERROR);
+  QCOMPARE(renderTile(engine.get()), BAYAN_STATUS_INTERNAL_ERROR);
+  const qsizetype received = engine.received().size();
+  QTest::qWait(200);
+  QCOMPARE(engine.received().size(), received);
+}
+
 void TestCInterface::freeingInsideTheCallbackDeliversNothingMore() {
-  // view.set is answered with an empty reply followed by four events (engine protocol §6). Freeing the engine inside the callback that
-  // receives the reply returns at once, and the four events are never delivered: the callback is never called again (bayan_ffi.h).
+  // view.set is answered with an empty reply followed by events (engine protocol §6.2): view.pages, view.layout.progress and
+  // overlay.update. Freeing the engine inside the callback that receives the reply returns at once, and the events are never delivered: the
+  // callback is never called again (bayan_ffi.h).
   auto engine = std::make_unique<RawEngine>();
   QVERIFY(engine->get() != nullptr);
   QVERIFY(succeeds(*engine, engine->request(u"hello"_s, helloPayload())));
@@ -294,18 +384,20 @@ void TestCInterface::everyMessageOfTheEngineMatchesTheSchema() {
   // Errors before the handshake: a hello without a common version, a message for another protocol version, a request before hello, and
   // bytes that are not JSON, which have no identifier to reply to.
   QVERIFY(waitedFor(engine.request(u"hello"_s, QJsonObject{{u"protocol_versions"_s, QJsonArray{99}}})));
-  QVERIFY(waitedFor(engine.rawRequest(QJsonObject{{u"v"_s, 1}, {u"id"_s, engine.takeId()}, {u"type"_s, u"hello"_s}})));
+  QVERIFY(waitedFor(engine.rawRequest(QJsonObject{{u"v"_s, 0}, {u"id"_s, engine.takeId()}, {u"type"_s, u"doc.close"_s}})));
   QVERIFY(waitedFor(engine.request(u"doc.open"_s, QJsonObject{{u"blob"_s, 1}})));
   QVERIFY(engine.postBytes("not json"_ba));
 
   // The handshake and the document.
   QVERIFY(waitedFor(engine.request(
       u"hello"_s,
-      QJsonObject{{u"protocol_versions"_s, QJsonArray{0}},
-                  {u"shell"_s, QJsonObject{{u"name"_s, u"tst_cinterface"_s}, {u"version"_s, u"0"_s}, {u"platform"_s, u"test"_s}}},
-                  {u"capabilities"_s, QJsonObject{{u"clipboard_formats"_s, QJsonArray{}}, {u"ime"_s, true}, {u"accessibility"_s, true}}},
-                  {u"locale"_s, u"en"_s},
-                  {u"theme"_s, u"light"_s}})));
+      QJsonObject{
+          {u"protocol_versions"_s, QJsonArray{1}},
+          {u"shell"_s,
+           QJsonObject{{u"name"_s, u"tst_cinterface"_s}, {u"version"_s, u"0"_s}, {u"platform"_s, u"linux"_s}, {u"runtime"_s, u"native"_s}}},
+          {u"capabilities"_s, QJsonObject{{u"clipboard_formats"_s, QJsonArray{}}, {u"ime"_s, true}, {u"accessibility"_s, true}}},
+          {u"locale"_s, u"en"_s},
+          {u"theme"_s, u"light"_s}})));
   const auto blob = static_cast<qint64>(bayan_blob_put(engine.get(), nullptr, 0));
   QVERIFY(waitedFor(engine.request(u"doc.open"_s, QJsonObject{{u"blob"_s, blob}})));
   QCOMPARE(bayan_blob_release(engine.get(), static_cast<BayanBlobId>(blob)), BAYAN_STATUS_OK);
@@ -316,6 +408,10 @@ void TestCInterface::everyMessageOfTheEngineMatchesTheSchema() {
                                                               {u"device_scale"_s, 1.0},
                                                               {u"mode"_s, u"print"_s},
                                                               {u"show_formatting_marks"_s, false}})));
+  // A new mode changes what the tiles show, so the engine invalidates the pages (engine protocol §14.6 item 2); print mode comes back
+  // after.
+  QVERIFY(waitedFor(engine.request(u"view.set"_s, viewIn(u"draft"_s))));
+  QVERIFY(waitedFor(engine.request(u"view.set"_s, viewIn(u"print"_s))));
   QVERIFY(waitedFor(engine.request(u"query.a11y"_s, QJsonObject{{u"doc_id"_s, 1}})));
 
   // Input, which the mock document of the real engine answers with changes to its editable line; the stub answers unsupported_message.
@@ -371,7 +467,7 @@ void TestCInterface::everyMessageOfTheEngineMatchesTheSchema() {
   QVERIFY(waitedFor(engine.request(u"diag.panic"_s)));
 
   // A panic, from an engine created with the test switch that allows it.
-  RawEngine panicking(QJsonObject{{u"test"_s, QJsonObject{{u"allow_panic"_s, true}}}});
+  RawEngine panicking(allowPanic());
   QVERIFY(panicking.get() != nullptr);
   QVERIFY(waitedFor(panicking.request(u"hello"_s, helloPayload())));
   QVERIFY(waitedFor(panicking.request(u"diag.panic"_s)));
@@ -383,16 +479,37 @@ void TestCInterface::everyMessageOfTheEngineMatchesTheSchema() {
                .isEmpty());
 
   // The stub's own test switches (src/engine/stub/bayan_engine_stub.cpp) send only messages the real engine could send too: a refused
-  // doc.open, and a welcome with another engine version. The real engine refuses to start with switches it does not know.
+  // doc.open, a welcome with another engine version, and the restart values of the switch, here one beyond what the real engine gives,
+  // which the shell must refuse but the schema allows. The real engine refuses to start with switches it does not know.
   std::vector<std::unique_ptr<RawEngine>> switched;
   if (isStub()) {
-    switched.push_back(std::make_unique<RawEngine>(
-        QJsonObject{{u"test"_s, QJsonObject{{u"doc_open"_s, u"fail"_s}, {u"engine_version"_s, u"<b>9.9.9</b>"_s}}}}));
+    switched.push_back(std::make_unique<RawEngine>(QJsonObject{
+        {
+            u"test"_s,
+            QJsonObject{
+                {u"doc_open"_s, u"fail"_s},
+                {u"engine_version"_s, u"<b>9.9.9</b>"_s},
+                {u"allow_panic"_s, true},
+                {u"restarts"_s, QJsonArray{QJsonObject{{u"number"_s, 7}, {u"limit"_s, 3}}}},
+            },
+        },
+    }));
     RawEngine &stub = *switched.back();
     QVERIFY(stub.get() != nullptr);
     QVERIFY(waitedFor(stub.request(u"hello"_s, helloPayload())));
     const auto stubBlob = static_cast<qint64>(bayan_blob_put(stub.get(), nullptr, 0));
     QVERIFY(!stub.waitForReply(stub.request(u"doc.open"_s, QJsonObject{{u"blob"_s, stubBlob}})).isEmpty());
+    QVERIFY(waitedFor(stub.request(u"diag.panic"_s)));
+    QVERIFY(!stub.waitFor([](const QJsonObject &message) { return message.value(u"type"_s) == u"engine.error"_s; }).isEmpty());
+    // Switches the stub does not know, and values of the wrong type, make it refuse to start.
+    for (const QJsonObject &test : {
+             QJsonObject{{u"restarts"_s, QJsonArray{1}}},
+             QJsonObject{{u"restarts"_s, QJsonArray{QJsonObject{}}}},
+             QJsonObject{{u"hello"_s, u"sometimes"_s}},
+             QJsonObject{{u"query_a11y"_s, true}},
+         }) {
+      QVERIFY(RawEngine(QJsonObject{{u"test"_s, test}}).get() == nullptr);
+    }
   } else {
     QVERIFY(RawEngine(QJsonObject{{u"test"_s, QJsonObject{{u"doc_open"_s, u"fail"_s}}}}).get() == nullptr);
   }
@@ -421,6 +538,7 @@ void TestCInterface::everyMessageOfTheEngineMatchesTheSchema() {
   }
   QSet<QString> expected{
       u"hello"_s,
+      u"ui.manifest"_s,
       u"doc.open"_s,
       u"view.set"_s,
       u"doc.close"_s,
@@ -442,8 +560,8 @@ void TestCInterface::everyMessageOfTheEngineMatchesTheSchema() {
     QVERIFY2(!mockDocumentRequired(), "the engine has no mock document");
     expected.insert(u"error limit_exceeded"_s);
   } else {
-    // The real engine implements what the stub refuses: the mock document's accessibility tree and input, the UI manifest, tiles through
-    // messages, recordings and replays.
+    // The real engine implements what the stub refuses: the mock document's accessibility tree and input, tiles through messages,
+    // recordings and replays.
     expected.unite(QSet<QString>{
         u"query.a11y"_s,
         u"a11y.update"_s,
@@ -451,7 +569,6 @@ void TestCInterface::everyMessageOfTheEngineMatchesTheSchema() {
         u"input.key"_s,
         u"input.composition"_s,
         u"input.pointer"_s,
-        u"ui.manifest"_s,
         u"render.tile"_s,
         u"diag.record.start"_s,
         u"diag.record.stop"_s,

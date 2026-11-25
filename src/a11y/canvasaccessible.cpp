@@ -102,7 +102,8 @@ QString CanvasAccessible::text(QAccessible::Text type) const {
 }
 
 void CanvasAccessible::setText(QAccessible::Text /*type*/, const QString & /*text*/) {
-  // Replacing the whole document's text is not something a screen reader should do, and protocol v0 has no message for it.
+  // Replacing the whole document's text is not something a screen reader should do, and the engine at the pinned core has no message for it
+  // (engine protocol §14.4 adds replacement ranges: CORE-014, DESK-005).
 }
 
 QRect CanvasAccessible::rect() const {
@@ -127,7 +128,8 @@ QAccessible::State CanvasAccessible::state() const {
   state.focused = canvas->hasActiveFocus();
   state.editable = true;
   state.multiLine = true;
-  // Not selectableText: protocol v0 has no selection to offer (the DESK-002 report, section 6).
+  // Not selectableText: the engine at the pinned core offers no selection yet (the DESK-002 report, section 6); engine protocol §14.4 and
+  // §14.7 item 2 add it (CORE-014, DESK-005).
   state.invisible = !canvas->isVisible() || canvas->window() == nullptr || !canvas->window()->isVisible();
   return state;
 }
@@ -162,7 +164,7 @@ bool CanvasAccessible::deletableAtCaret(int startOffset, int endOffset) const {
 }
 
 void CanvasAccessible::Text::selection(int /*selectionIndex*/, int *startOffset, int *endOffset) const {
-  // No selections in protocol v0's accessibility tree.
+  // No selections in the pinned engine's accessibility tree yet (engine protocol §14.7 item 2 adds them: CORE-014, DESK-005).
   *startOffset = 0;
   *endOffset = 0;
 }
@@ -178,7 +180,8 @@ void CanvasAccessible::Text::setSelection(int /*selectionIndex*/, int /*startOff
 int CanvasAccessible::Text::cursorPosition() const { return owner_.cursorPosition(); }
 
 void CanvasAccessible::Text::setCursorPosition(int /*position*/) {
-  // Protocol v0 cannot move the caret to an offset (the DESK-002 report recommends a message for it).
+  // The engine at the pinned core cannot move the caret to an offset yet; input.select (engine protocol §14.4) adds it (CORE-014,
+  // DESK-005).
 }
 
 QString CanvasAccessible::Text::text(int startOffset, int endOffset) const {
@@ -208,7 +211,8 @@ QRect CanvasAccessible::Text::characterRect(int offset) const {
 }
 
 int CanvasAccessible::Text::offsetAtPoint(const QPoint & /*point*/) const {
-  // Which character is under a point is hit-testing, which belongs to the engine (engine protocol §7); protocol v0 has no query for it.
+  // Which character is under a point is hit-testing, which belongs to the engine (engine protocol §7); the engine at the pinned core has no
+  // query for it yet (query.hit, engine protocol §14.4: CORE-014, DESK-005).
   return -1;
 }
 
@@ -224,7 +228,8 @@ void CanvasAccessible::Text::scrollToSubstring(int startIndex, int /*endIndex*/)
 }
 
 QString CanvasAccessible::Text::attributes(int offset, int *startOffset, int *endOffset) const {
-  // The v0 tree has no text attributes (fonts, styles, languages); report one run per line.
+  // The pinned engine's tree has no text attributes yet (fonts, styles, languages; engine protocol §14.7 item 2 adds language and
+  // direction: CORE-014, DESK-005); report one run per line.
   const DocumentCanvas *canvas = owner_.canvas();
   const AccessibleText::Segment *segment = canvas == nullptr ? nullptr : canvas->accessibleText().segmentAt(offset);
   *startOffset = segment == nullptr ? offset : segment->start;
@@ -233,7 +238,8 @@ QString CanvasAccessible::Text::attributes(int offset, int *startOffset, int *en
 }
 
 void CanvasAccessible::EditableText::deleteText(int startOffset, int endOffset) {
-  // Protocol v0 edits only at the caret, with keys; text elsewhere cannot be deleted from here.
+  // The engine at the pinned core edits only at the caret, with keys; text elsewhere cannot be deleted from here until input.text takes a
+  // range (engine protocol §14.4: CORE-014, DESK-005).
   DocumentCanvas *canvas = owner_.canvas();
   if (canvas == nullptr || !owner_.deletableAtCaret(startOffset, endOffset)) {
     return;

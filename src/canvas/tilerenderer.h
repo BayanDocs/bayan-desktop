@@ -2,9 +2,9 @@
 //
 // bayan_render_tile waits until the engine has drawn the tile (engine protocol §8), so the GUI thread must never call it while the user
 // scrolls. The canvas hands this object a list of tiles, most urgent first; one thread renders them one after another, through the C
-// interface straight into the image's memory, and hands each finished image back to the GUI thread. The engine draws tiles one at a time in
-// v0, so a second thread would only wait in line. When the view moves on, the canvas replaces the list, so tiles that are no longer wanted
-// are never rendered.
+// interface straight into the image's memory, and hands each finished image back to the GUI thread. The engine draws tiles one at a time on
+// its own thread, so a second thread would only wait in line. When the view moves on, the canvas replaces the list, so tiles that are no
+// longer wanted are never rendered.
 
 #pragma once
 
@@ -37,6 +37,8 @@ public:
     // The render.tile payload (engine protocol §6.4).
     QJsonObject request{};
     QSize pixels{};
+    // The canvas's document generation the tile is for; see DocumentCanvas.
+    quint64 generation = 0;
     // When the canvas first asked for the tile, for the latency figures.
     Clock::time_point wanted;
   };
@@ -45,8 +47,9 @@ public:
     TileKey key{};
     // The pixels, or a null image if the engine refused the tile.
     QImage image{};
-    // The last request the engine had handled before it rendered the tile (Engine::lastPostedRequest).
-    qint64 renderedAfter = 0;
+    // The render revision the pixels show (engine protocol §14.6).
+    quint64 revision = 0;
+    quint64 generation = 0;
     Clock::time_point wanted;
     Clock::time_point started;
     Clock::time_point finished;

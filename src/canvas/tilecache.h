@@ -1,10 +1,9 @@
 // The tiles the document canvas has, and whether they still show what the engine would draw (DESK-002).
 //
 // A tile is rendered on the canvas's tile thread and arrives later. Meanwhile the engine may change the document (the user types) and say
-// so with render.invalidate. To know whether a tile that arrives shows the document before or after such a change, every tile records
-// renderedAfter, the last request the engine had already handled when it rendered the tile (Engine::lastPostedRequest), and every
-// invalidation records the request whose handling caused it (DocumentSession tells). A tile is fresh if it was rendered after its region's
-// last invalidation; otherwise it is dirty: the canvas keeps showing it, so nothing flickers, and renders it again.
+// so with render.invalidate. Tiles and invalidations carry the document's render revision (engine protocol §14.6): every tile the one it
+// shows, every invalidation the one after its change. A tile is kept while no invalidation with a higher revision covers it, whatever order
+// the two arrive in; once one does, the tile is dirty: the canvas keeps showing it, so nothing flickers, and renders it again.
 //
 // Used on the GUI thread only. Images are kept within a memory budget; the least recently shown ones go first.
 
@@ -33,8 +32,8 @@ public:
     QImage image{};
     // Increases whenever the image changes, so the scene graph knows to upload it again.
     std::uint64_t version = 0;
-    // See the file comment.
-    qint64 renderedAfter = 0;
+    // The render revision the image shows; see the file comment.
+    quint64 revision = 0;
     bool dirty = false;
     // Failed attempts since the last success; the canvas stops asking after kMaxFailures until the region changes.
     int failures = 0;
@@ -74,14 +73,14 @@ public:
   [[nodiscard]] std::vector<StandIn> standInsFor(const protocol::Page &page, const protocol::BluRect &area,
                                                  const std::vector<double> &scales, int tileSize) const;
 
-  // A tile arrived from the tile thread; image is null if the engine refused it. Unknown keys (evicted meanwhile) are ignored. Returns
-  // whether the cache kept the image.
-  bool deliver(const TileKey &key, const QImage &image, qint64 renderedAfter);
-  // The engine changed these rectangles of a page while handling request cause.
-  void invalidate(int page, const std::vector<protocol::BluRect> &rects, qint64 cause);
+  // A tile arrived from the tile thread, showing render revision revision; image is null if the engine refused it. Unknown keys (evicted
+  // meanwhile) are ignored. Returns whether the cache kept the image.
+  bool deliver(const TileKey &key, const QImage &image, quint64 revision);
+  // The engine changed these rectangles of a page; revision is the document's render revision after the change.
+  void invalidate(int page, const std::vector<protocol::BluRect> &rects, quint64 revision);
   // Forgets every tile, for example when the pages change. The changes remembered for tiles still being rendered stay.
   void clear();
-  // Forgets every tile and every change: for another engine, whose request numbers start again.
+  // Forgets every tile and every change: for another document, whose revisions start again.
   void reset();
   void setBudget(qint64 bytes);
   // Drops tiles that frame did not use, least recently used first, until the images fit the budget.
@@ -96,17 +95,17 @@ private:
   struct Invalidation {
     int page = 0;
     std::vector<protocol::BluRect> rects;
-    qint64 cause = 0;
+    quint64 revision = 0;
   };
 
-  // Whether an invalidation after renderedAfter touched the rectangle.
-  [[nodiscard]] bool changedSince(int page, const protocol::BluRect &rect, qint64 renderedAfter) const;
+  // Whether an invalidation with a revision higher than revision touched the rectangle.
+  [[nodiscard]] bool changedSince(int page, const protocol::BluRect &rect, quint64 revision) const;
   void setImage(Entry &entry, const QImage &image);
 
   std::map<TileKey, Entry> entries_;
   std::deque<Invalidation> recent_;
-  // Invalidations caused by requests up to this one have been forgotten; tiles rendered before it count as dirty.
-  qint64 forgottenUpTo_ = 0;
+  // Invalidations of revisions up to this one have been forgotten; tiles of earlier revisions count as dirty.
+  quint64 forgottenUpTo_ = 0;
   qint64 bytes_ = 0;
   qint64 budget_;
 };

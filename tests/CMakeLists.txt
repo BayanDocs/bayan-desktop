@@ -27,8 +27,8 @@ qt_import_plugins(tst_cinterface EXCLUDE_BY_TYPE permissions) # See src/CMakeLis
 bayan_deploy_engine_runtime(tst_cinterface)
 add_test(NAME engine.c_interface COMMAND tst_cinterface)
 
-# With an SDK engine: the copies of the SDK's C header and JSON Schema in src/engine/stub must be byte for byte the SDK's, so that moving the
-# bayan-core pin without updating them fails (src/engine/README.md).
+# With an SDK engine: the copies of the SDK's C header, JSON Schema and conformance vectors in src/engine/stub must be byte for byte the SDK's,
+# so that moving the bayan-core pin without updating them fails (src/engine/README.md).
 if(BAYAN_ENGINE STREQUAL "sdk")
   add_test(NAME engine.sdk_copies
     COMMAND "${CMAKE_COMMAND}"
@@ -48,7 +48,7 @@ add_test(NAME app.document_session COMMAND tst_documentsession)
 # Tests of the document canvas in a window (src/canvas, src/a11y): pixels, scrolling, zoom, keys, input-method composition and the
 # accessibility bridge, against the engine the build links. Tests that need the real engine's mock document skip with the stub.
 qt_add_executable(tst_canvas tst_canvas.cpp)
-target_link_libraries(tst_canvas PRIVATE bayan_shell Qt6::Quick Qt6::Test bayan::compile_options)
+target_link_libraries(tst_canvas PRIVATE bayan_shell bayan_engine_messages Qt6::Quick Qt6::Test bayan::compile_options)
 qt_import_plugins(tst_canvas EXCLUDE_BY_TYPE permissions) # See src/CMakeLists.txt.
 bayan_deploy_engine_runtime(tst_canvas)
 add_test(NAME app.canvas COMMAND tst_canvas)
@@ -59,14 +59,17 @@ add_test(NAME app.canvas_scale125 COMMAND tst_canvas)
 # buttons and their announcements, plain text for engine strings, and what the interface does after engine failures (engine protocol §12.1).
 qt_add_executable(tst_interface tst_interface.cpp)
 # bayan_shellplugin is the QML module's static plugin; tst_interface.cpp imports it with Q_IMPORT_QML_PLUGIN, as main.cpp does.
-target_link_libraries(tst_interface PRIVATE bayan_shell bayan_shellplugin Qt6::Quick Qt6::QuickControls2 Qt6::Test bayan::compile_options)
+target_link_libraries(tst_interface PRIVATE bayan_shell bayan_shellplugin bayan_engine_messages Qt6::Quick Qt6::QuickControls2 Qt6::Test
+                                            bayan::compile_options)
 qt_import_plugins(tst_interface EXCLUDE_BY_TYPE permissions) # See src/CMakeLists.txt.
 bayan_deploy_engine_runtime(tst_interface)
 add_test(NAME app.interface COMMAND tst_interface)
 
 # Unit tests of the shell's pure logic, which needs no engine: the protocol parsers, the tile arithmetic and cache, the key and input-method
-# translation, the accessible text, and the allowance of restarts after engine failures.
-foreach(unit IN ITEMS protocol tiles input accessibletext restartallowance)
+# translation, the accessible text, and the conformance vectors of engine protocol §15 (tst_conformance: every shell and desktop case of
+# restart.json, tile-grid.json, a11y-limits.json and keys.json, read from the copies in src/engine/stub/schema/conformance, which
+# engine.sdk_copies compares with the SDK's).
+foreach(unit IN ITEMS protocol tiles input accessibletext conformance)
   qt_add_executable(tst_${unit} tst_${unit}.cpp)
   target_link_libraries(tst_${unit} PRIVATE bayan_shell Qt6::Test bayan::compile_options)
   qt_import_plugins(tst_${unit} EXCLUDE_BY_TYPE permissions) # See src/CMakeLists.txt.
@@ -76,6 +79,12 @@ foreach(unit IN ITEMS protocol tiles input accessibletext restartallowance)
 endforeach()
 # The protocol parsers' tests also check their valid samples against the protocol's JSON Schema, so that the samples stay valid.
 target_link_libraries(tst_protocol PRIVATE bayan_protocol_schema)
+# The conformance vectors, compiled into their test as the resources :/bayan/test/conformance/<file>.
+file(GLOB conformance_vectors CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/src/engine/stub/schema/conformance/*.json")
+qt_add_resources(tst_conformance conformance_vectors
+  PREFIX "/bayan/test/conformance"
+  BASE "${PROJECT_SOURCE_DIR}/src/engine/stub/schema/conformance"
+  FILES ${conformance_vectors})
 
 # Unit tests of the tests' checker of the engine protocol's JSON Schema (support/protocolschema.h), which needs no engine.
 qt_add_executable(tst_protocolschema tst_protocolschema.cpp)

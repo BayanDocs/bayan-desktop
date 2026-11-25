@@ -46,7 +46,7 @@ ApplicationWindow {
                 case DocumentSession.Status.Closed:
                     return qsTr("No document open");
                 case DocumentSession.Status.Failed:
-                    return qsTr("Engine stopped");
+                    return window.session.updateRequired ? qsTr("Update needed") : qsTr("Engine stopped");
                 default:
                     return window.session.engineVersion === "" ? qsTr("Starting the engine…") : qsTr("Opening the document…");
                 }
@@ -54,7 +54,8 @@ ApplicationWindow {
         }
 
         // Zoom out and Zoom in step through the canvas's zoom steps, and the new level is announced to screen readers, as on the web: the
-        // keyboard's way to zoom, since the canvas sends Control with =, - and 0 to the engine (ADR-0020 §5).
+        // keyboard's way to zoom (ADR-0020 §5). No manifest of engine protocol v1 binds Control with =, - and 0, so they do nothing in the
+        // canvas yet; the manifest that first needs keyboard zoom adds commands that the shell carries out (§14.9).
         Row {
             id: zoomControls
 
