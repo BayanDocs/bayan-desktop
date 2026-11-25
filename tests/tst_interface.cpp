@@ -11,15 +11,10 @@
 #include "enginemessages.h"
 
 #include <QtCore/QCoreApplication>
-#include <QtCore/QDir>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
 #include <QtCore/QJsonValue>
-#include <QtCore/QTemporaryDir>
-#include <QtCore/QUrl>
 #include <QtGui/QAccessible>
-#include <QtGui/QColor>
-#include <QtGui/QImage>
 #include <QtGui/QInputMethodEvent>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
@@ -329,20 +324,16 @@ void TestInterface::markupInAnEngineStringIsShownAsPlainText() {
   if (!isStub()) {
     QSKIP("Needs the stub's engine_version test switch; the other engine's strings hold no markup.");
   }
-  // A local image 400 pixels tall: shown as rich text, the status bar's text would be that tall; as plain text it is one short line.
-  QTemporaryDir folder;
-  QVERIFY(folder.isValid());
-  QImage tall(8, 400, QImage::Format_RGB32);
-  tall.fill(QColor(Qt::red));
-  const QString image = QDir(folder.path()).filePath(u"tall.png"_s);
-  QVERIFY(tall.save(image));
-  const QString version = u"<img src=\"%1\"><b>bold</b>"_s.arg(QUrl::fromLocalFile(image).toString());
+  // Markup that, shown as rich text, would make the status bar's text nine lines tall; as plain text it is one short line. An engine
+  // version is at most 64 printable ASCII characters (engine protocol §14.1 item 6), so the markup is line breaks: a local image's path
+  // would not fit on every system, and a longer version breaks the protocol.
+  const QString version = u"<b>bold</b><br><br><br><br><br><br><br><br>"_s;
+  QVERIFY(version.size() <= 64);
   const auto ui = openInterface(QJsonObject{{u"test"_s, QJsonObject{{u"engine_version"_s, version}}}});
   QVERIFY(ui);
   QQuickItem *status = ui->item(u"statusText"_s);
   QVERIFY(status != nullptr);
   QVERIFY(status->property("text").toString().contains(version));
-  QTest::qWait(300); // Time for an image to load, if one were loaded.
   QCOMPARE(status->property("lineCount").toInt(), 1);
   QVERIFY2(status->implicitHeight() < 100, qPrintable(QString::number(status->implicitHeight())));
 }
