@@ -549,7 +549,7 @@ void TestInput::deleteSurroundingTextBecomesDeletions() {
            (std::vector<ImeAction>{{.kind = Kind::DeleteBefore, .length = 2}, {.kind = Kind::DeleteAfter, .length = 1}}));
   // Only after the caret.
   QCOMPARE(translateCommit(ime, QString(), 0, 2), (std::vector<ImeAction>{{.kind = Kind::DeleteAfter, .length = 2}}));
-  // A range that starts after the caret cannot be expressed in protocol v1 and is left out; the commit still happens.
+  // A range that starts after the caret cannot be sent to the engine at the pinned core and is left out; the commit still happens.
   QCOMPARE(translateCommit(ime, u"x"_s, 1, 1), (std::vector<ImeAction>{{.kind = Kind::Commit, .text = u"x"_s}}));
   // The input method decides the numbers: the extremes of int pass through without overflowing (the canvas deletes only the text there
   // is).

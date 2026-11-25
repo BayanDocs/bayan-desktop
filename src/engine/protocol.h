@@ -195,7 +195,8 @@ public:
   [[nodiscard]] std::size_t size() const { return nodes_.size(); }
   // The nodes in reading order: depth first, each node before its children, as the engine lists them.
   [[nodiscard]] std::vector<const AccessibleNode *> readingOrder() const;
-  // How deep a node sits: 1 for the root, which is the document node in the tree of a whole document; 0 if it is not in the tree.
+  // How deep a node sits: 1 for the root, which is the document node in the tree of a whole document; 0 if it is not in the tree. It
+  // follows the node's parents, so it costs no more than the tree's depth.
   [[nodiscard]] int levelOf(quint64 id) const;
   // The children that nodes lack, in reading order, and for each node from its first child to its last.
   [[nodiscard]] std::vector<MissingChildren> missingChildren() const;
@@ -211,7 +212,7 @@ public:
 
 private:
   friend std::optional<AccessibleTree> parseAccessibleTree(const QJsonValue &value, int pageCount, int rootLevel);
-  AccessibleTree(quint64 root, std::map<quint64, AccessibleNode> nodes) : root_(root), nodes_(std::move(nodes)) {}
+  AccessibleTree(quint64 root, std::map<quint64, AccessibleNode> nodes);
 
   // A node and everything below it: their identifiers, and how many levels deep it goes (1 for a node without children).
   struct Subtree {
@@ -221,10 +222,22 @@ private:
   [[nodiscard]] Subtree subtree(quint64 id) const;
   // Whether part's nodes may join this tree: none of its identifiers is used elsewhere, outside the subtrees of the nodes leaving.
   [[nodiscard]] bool fits(const AccessibleTree &part, const std::vector<quint64> &leaving) const;
+  // Records the parent of every node below id, which the tree holds with its subtree.
+  void indexParents(quint64 id);
 
   quint64 root_ = 0;
   std::map<quint64, AccessibleNode> nodes_;
+  // The parent of every node but the root.
+  std::map<quint64, quint64> parents_;
 };
+
+// The identifier of a node of the accessibility tree as a message gives it: the node must be an object, and its id an integer from 1 to
+// 2^53 - 1 (engine protocol §6.6, §14.1 item 5). Nothing if it is not.
+[[nodiscard]] std::optional<quint64> parseNodeId(const QJsonValue &node);
+
+// Whether an answer to query.a11y with a children range from start holds what engine protocol §14.7 item 1 requires of it: the child at
+// start, whenever the node it gives has a child there.
+[[nodiscard]] bool holdsChildFrom(const AccessibleNode &node, quint32 start);
 
 // Parsers. Each returns nothing if the value does not have the shape and ranges the protocol allows.
 [[nodiscard]] std::optional<BluRect> parseRect(const QJsonValue &value);

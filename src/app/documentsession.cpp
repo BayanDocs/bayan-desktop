@@ -436,13 +436,17 @@ void DocumentSession::addAccessibilityPart(qint64 requestId, bool ok, const QJso
   protocol::AccessibleTree &tree = *accessibilityTree_;
   auto part = protocol::parseAccessibleTree(payload.value(u"root"_s), pageCount(), tree.levelOf(asked.node));
   const auto caret = protocol::parseAccessibleCaret(payload.value(u"caret"_s));
-  if (documentIdOf(payload) != documentId_ || !part || !caret || part->root().id != asked.node) {
+  // The answer holds the child at the range's start whenever the node has one (engine protocol §14.7 item 1); one that does not would
+  // leave the same range missing, and the session would ask for it for ever.
+  if (documentIdOf(payload) != documentId_ || !part || !caret || part->root().id != asked.node ||
+      !protocol::holdsChildFrom(part->root(), asked.start)) {
     fail();
     return;
   }
+  // The engine answers in order with its a11y.update events, which the session has applied, so a part that does not fit the tree (an
+  // identifier that the tree holds elsewhere) breaks the protocol too; reloading the tree would only bring the same part back.
   if (!tree.addChildren(*part)) {
-    // The part does not fit the tree as the session has it: start again from the whole tree.
-    reloadAccessibilityTree();
+    fail();
     return;
   }
   accessibilityCaret_ = *caret;
@@ -493,33 +497,45 @@ void DocumentSession::reloadAccessibilityTree() {
 }
 
 void DocumentSession::applyAccessibilityUpdate(const QJsonObject &payload) {
-  if (!accessibilityTree_ || accessibilityRequest_ != 0) {
-    // No tree yet, or a fresh one is on its way and will include this change.
-    return;
-  }
+  // Every change is checked before anything uses it, also while the session waits for the tree or for parts of it (engine protocol §14.1
+  // item 5): a change is an object with a kind, and a node that is an object with an identifier in the protocol's range.
   const QJsonValue changes = payload.value(u"changes"_s);
   const auto caret = protocol::parseAccessibleCaret(payload.value(u"caret"_s));
   if (!changes.isArray() || !caret) {
     fail();
     return;
   }
-  QList<quint64> changed;
+  struct Change {
+    bool replace = false;
+    quint64 id = 0;
+    QJsonValue node;
+  };
+  std::vector<Change> checked;
   for (const auto &change : changes.toArray()) {
     const QJsonObject object = change.toObject();
     const QJsonValue node = object.value(u"node"_s);
-    if (!change.isObject() || !object.value(u"kind"_s).isString()) {
+    const auto id = protocol::parseNodeId(node);
+    if (!change.isObject() || !object.value(u"kind"_s).isString() || !id) {
       fail();
       return;
     }
-    if (object.value(u"kind"_s).toString() != u"replace"_s) {
+    checked.push_back({.replace = object.value(u"kind"_s).toString() == u"replace"_s, .id = *id, .node = node});
+  }
+  if (!accessibilityTree_ || accessibilityRequest_ != 0) {
+    // No tree yet, or a fresh one is on its way and will include these changes.
+    return;
+  }
+  QList<quint64> changed;
+  for (const Change &change : checked) {
+    if (!change.replace) {
       // A kind of change this shell does not know: its tree can no longer be trusted to match the engine's.
       reloadAccessibilityTree();
       return;
     }
-    const quint64 id = static_cast<quint64>(std::max<qint64>(0, node.toObject().value(u"id"_s).toInteger(0)));
-    const int level = accessibilityTree_->levelOf(id);
+    // The node's level follows its parents in the tree, so each change costs the tree's depth, not its size.
+    const int level = accessibilityTree_->levelOf(change.id);
     // A change to a node makes its parts worth asking for again.
-    std::erase_if(refusedParts_, [id](const auto &refused) { return refused.first == id; });
+    std::erase_if(refusedParts_, [&change](const auto &refused) { return refused.first == change.id; });
     if (level == 0) {
       // A node that the tree does not hold: one in a part still being loaded, whose answer will hold it as it is now, or one that the
       // session's tree lacks for another reason, and then the whole tree is asked for again.
@@ -530,7 +546,7 @@ void DocumentSession::applyAccessibilityUpdate(const QJsonObject &payload) {
       continue;
     }
     // Each change is within the limits too, counted from the replaced node's level (engine protocol §14.7 item 1).
-    const auto subtree = protocol::parseAccessibleTree(node, pageCount(), level);
+    const auto subtree = protocol::parseAccessibleTree(change.node, pageCount(), level);
     if (!subtree) {
       fail();
       return;

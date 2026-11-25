@@ -3,8 +3,9 @@
 // including the update prompt.
 //
 // It is a tab stop just before the canvas, and scrolls the pages with Page Up, Page Down, Home, End and the arrow keys, because the canvas
-// sends those to the engine as document keys (engine protocol §14.3); so scrolling stays keyboard-operable (ADR-0020 §5). When a failure closes the document, keyboard
-// focus that was in it stays here, never on the offer to reopen it, so that a key the user meant for the document cannot accept the offer.
+// sends those to the engine as document keys (engine protocol §14.3); so scrolling stays keyboard-operable (ADR-0020 §5). When a failure
+// closes the document, keyboard focus that was in it stays here, never on the offer to reopen it, so that a key the user meant for the
+// document cannot accept the offer.
 // Every text the engine or a document provides is shown as plain text (threat T18).
 import QtQuick
 import QtQuick.Controls

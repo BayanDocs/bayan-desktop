@@ -531,6 +531,25 @@ std::optional<AccessibleTree> parseAccessibleTree(const QJsonValue &value, int p
   return AccessibleTree(root, std::move(nodes));
 }
 
+AccessibleTree::AccessibleTree(quint64 root, std::map<quint64, AccessibleNode> nodes) : root_(root), nodes_(std::move(nodes)) {
+  indexParents(root_);
+}
+
+void AccessibleTree::indexParents(quint64 id) {
+  std::vector<quint64> pending{id};
+  while (!pending.empty()) {
+    const AccessibleNode *node = find(pending.back());
+    pending.pop_back();
+    if (node == nullptr) {
+      continue;
+    }
+    for (const quint64 child : node->children) {
+      parents_.insert_or_assign(child, node->id);
+      pending.push_back(child);
+    }
+  }
+}
+
 const AccessibleNode &AccessibleTree::root() const { return nodes_.find(root_)->second; }
 
 const AccessibleNode *AccessibleTree::find(quint64 id) const {
@@ -574,20 +593,19 @@ AccessibleTree::Subtree AccessibleTree::subtree(quint64 id) const {
 }
 
 int AccessibleTree::levelOf(quint64 id) const {
-  std::vector<std::pair<quint64, int>> pending{{root_, 1}};
-  while (!pending.empty()) {
-    const auto [current, depth] = pending.back();
-    pending.pop_back();
-    if (current == id) {
-      return depth;
-    }
-    if (const AccessibleNode *node = find(current)) {
-      for (const quint64 child : node->children) {
-        pending.emplace_back(child, depth + 1);
-      }
-    }
+  if (!nodes_.contains(id)) {
+    return 0;
   }
-  return 0;
+  // Up through the parents to the root; a well-formed tree is at most kMaxTreeDepth levels deep, so the walk is short.
+  int level = 1;
+  for (quint64 current = id; current != root_; ++level) {
+    const auto parent = parents_.find(current);
+    if (parent == parents_.end() || level > kMaxTreeDepth) {
+      return 0;
+    }
+    current = parent->second;
+  }
+  return level;
 }
 
 std::vector<MissingChildren> AccessibleTree::missingChildren() const {
@@ -632,8 +650,12 @@ bool AccessibleTree::replace(const AccessibleTree &subtree) {
   }
   for (const quint64 id : leaving.ids) {
     nodes_.erase(id);
+    if (id != subtree.root_) {
+      parents_.erase(id);
+    }
   }
   nodes_.insert(subtree.nodes_.begin(), subtree.nodes_.end());
+  indexParents(subtree.root_);
   return true;
 }
 
@@ -682,11 +704,17 @@ bool AccessibleTree::addChildren(const AccessibleTree &part) {
   }
   for (const quint64 id : leavingNodes) {
     nodes_.erase(id);
+    parents_.erase(id);
   }
   for (const auto &[id, partNode] : part.nodes_) {
     if (id != part.root_) {
       nodes_.insert_or_assign(id, partNode);
     }
+  }
+  // The parents of the part's nodes: its children's is the node, and the part knows the rest. Only the part is walked.
+  for (const quint64 child : incoming.children) {
+    parents_.insert_or_assign(child, part.root_);
+    indexParents(child);
   }
   // The node's own fields as the engine has them now, and the children it holds.
   AccessibleNode updated = incoming;
@@ -704,6 +732,22 @@ bool AccessibleTree::addChildren(const AccessibleTree &part) {
   }
   nodes_.insert_or_assign(part.root_, std::move(updated));
   return true;
+}
+
+std::optional<quint64> parseNodeId(const QJsonValue &node) {
+  const auto id = integer(node.toObject().value(u"id"_s), 1, kMaxExactInteger);
+  if (!node.isObject() || !id) {
+    return std::nullopt;
+  }
+  return static_cast<quint64>(*id);
+}
+
+bool holdsChildFrom(const AccessibleNode &node, quint32 start) {
+  if (!node.childCount) {
+    // The node holds all of its children: the one at start among them, if it has one.
+    return true;
+  }
+  return start >= *node.childCount || std::ranges::binary_search(node.childIndices, start);
 }
 
 std::optional<std::optional<AccessibleCaret>> parseAccessibleCaret(const QJsonValue &value) {

@@ -103,6 +103,55 @@ std::optional<QJsonArray> recognizedCases(const QString &area, const QList<CaseK
   return file.value(u"cases"_s).toArray();
 }
 
+// Whether a tile-grid case gives its page and its expectation with exactly the fields that tileGridCases checks, so that a field that a
+// later version of the vectors adds cannot go unchecked (§15).
+bool hasKnownTileGridFields(const QJsonObject &testCase) {
+  const QSet<QString> size{u"width"_s, u"height"_s};
+  const QSet<QString> rect{u"x"_s, u"y"_s, u"width"_s, u"height"_s};
+  const QJsonObject expected = testCase.value(u"expect"_s).toObject();
+  if (keysOf(testCase.value(u"page"_s).toObject()) != size ||
+      keysOf(expected) != QSet<QString>{u"pixels"_s, u"columns"_s, u"rows"_s, u"tiles"_s} ||
+      keysOf(expected.value(u"pixels"_s).toObject()) != size || !expected.value(u"tiles"_s).isArray()) {
+    return false;
+  }
+  const QJsonArray tiles = expected.value(u"tiles"_s).toArray();
+  return std::ranges::all_of(tiles, [&rect](const QJsonValue &tile) {
+    const QJsonObject object = tile.toObject();
+    return keysOf(object) == QSet<QString>{u"column"_s, u"row"_s, u"pixels"_s, u"blu"_s} &&
+           keysOf(object.value(u"pixels"_s).toObject()) == rect && keysOf(object.value(u"blu"_s).toObject()) == rect;
+  });
+}
+
+// Whether a key case's expectation holds exactly send, which keyCases checks, and runs, the engine's.
+bool hasKnownKeyExpectation(const QJsonObject &testCase) {
+  return keysOf(testCase.value(u"expect"_s).toObject()) == QSet<QString>{u"send"_s, u"runs"_s};
+}
+
+// The case with the field "extra" added to the object at path: field names, and indices into arrays.
+QJsonObject withExtraField(const QJsonObject &testCase, const QStringList &path) {
+  QList<QJsonValue> chain{testCase};
+  for (const QString &step : path) {
+    const QJsonValue current = chain.last();
+    chain.append(current.isArray() ? current.toArray().at(step.toInt()) : current.toObject().value(step));
+  }
+  QJsonObject leaf = chain.last().toObject();
+  leaf.insert(u"extra"_s, true);
+  QJsonValue value = leaf;
+  for (qsizetype depth = path.size() - 1; depth >= 0; --depth) {
+    const QJsonValue &container = chain.at(depth);
+    if (container.isArray()) {
+      QJsonArray array = container.toArray();
+      array.replace(path.at(depth).toInt(), value);
+      value = array;
+    } else {
+      QJsonObject object = container.toObject();
+      object.insert(path.at(depth), value);
+      value = object;
+    }
+  }
+  return value.toObject();
+}
+
 QString compact(const QJsonValue &value) {
   return QString::fromUtf8(value.isObject() ? QJsonDocument(value.toObject()).toJson(QJsonDocument::Compact)
                                             : QJsonDocument(QJsonArray{value}).toJson(QJsonDocument::Compact));
@@ -225,6 +274,7 @@ private slots:
   void accessibilityLimitCases();
   void keyCases();
   void unknownCasesAreNotRecognized();
+  void unknownExpectationsAreNotRecognized();
 };
 
 void TestConformance::restartCases() {
@@ -299,6 +349,7 @@ void TestConformance::tileGridCases() {
   for (const auto &value : *cases) {
     const QJsonObject testCase = value.toObject();
     const QString id = testCase.value(u"id"_s).toString();
+    QVERIFY2(hasKnownTileGridFields(testCase), qPrintable(id + u": fields this test does not check"_s));
     const QJsonObject size = testCase.value(u"page"_s).toObject();
     const protocol::Page page{
         .index = 0,
@@ -421,7 +472,7 @@ void TestConformance::keyCases() {
     const QString manifest = testCase.value(u"manifest"_s).toString();
     QVERIFY2(manifests.contains(manifest), qPrintable(id + u": no manifest case "_s + manifest));
     const QJsonObject expected = testCase.value(u"expect"_s).toObject();
-    QVERIFY2(expected.value(u"send"_s).isBool(), qPrintable(id + u": an unknown expectation"_s));
+    QVERIFY2(hasKnownKeyExpectation(testCase) && expected.value(u"send"_s).isBool(), qPrintable(id + u": an unknown expectation"_s));
     QVERIFY2(manifests.value(manifest).sends(*press) == expected.value(u"send"_s).toBool(), qPrintable(id));
     ++run;
   }
@@ -436,6 +487,35 @@ void TestConformance::unknownCasesAreNotRecognized() {
   QVERIFY(!recognizedCases(u"restart"_s, kinds));
   QTest::ignoreMessage(QtWarningMsg, QRegularExpression(u"missing"_s));
   QVERIFY(!recognizedCases(u"no-such-area"_s, kinds));
+}
+
+void TestConformance::unknownExpectationsAreNotRecognized() {
+  // A field that the runners do not check, anywhere in a tile-grid case's page or expectation or in a key case's expectation, fails the
+  // case: the vectors' own cases pass, and each of them with one field more does not.
+  const QJsonArray tileGrid = vectorFile(u"tile-grid"_s).value(u"cases"_s).toArray();
+  const QJsonArray keys = vectorFile(u"keys"_s).value(u"cases"_s).toArray();
+  QVERIFY(!tileGrid.isEmpty() && !keys.isEmpty());
+  const QJsonObject tileCase = tileGrid.first().toObject();
+  QVERIFY(hasKnownTileGridFields(tileCase));
+  for (const QStringList &path : {
+           QStringList{u"expect"_s},
+           QStringList{u"page"_s},
+           QStringList{u"expect"_s, u"pixels"_s},
+           QStringList{u"expect"_s, u"tiles"_s, u"0"_s},
+           QStringList{u"expect"_s, u"tiles"_s, u"0"_s, u"pixels"_s},
+           QStringList{u"expect"_s, u"tiles"_s, u"0"_s, u"blu"_s},
+       }) {
+    QVERIFY2(!hasKnownTileGridFields(withExtraField(tileCase, path)), qPrintable(path.join(u'/')));
+  }
+  QJsonObject keyCase;
+  for (const auto &value : keys) {
+    if (value.toObject().contains(u"press"_s)) {
+      keyCase = value.toObject();
+      break;
+    }
+  }
+  QVERIFY(hasKnownKeyExpectation(keyCase));
+  QVERIFY(!hasKnownKeyExpectation(withExtraField(keyCase, {u"expect"_s})));
 }
 
 QTEST_GUILESS_MAIN(TestConformance)

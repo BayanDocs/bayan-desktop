@@ -263,6 +263,69 @@ std::unique_ptr<OpenSession> openSession(const QJsonObject &config = {}) {
   return open;
 }
 
+// A stub session whose accessibility tree the test hands over: the document node with children 2 to 4 of 7 (identifiers 4 to 6), so that
+// the session asks for the two parts it lacks, children 0 and 1 and children 5 and 6, and waits for them. The real engine knows no
+// query_a11y switch: with it, nothing is returned.
+struct PartialTree {
+  std::unique_ptr<bayan::Engine> engine;
+  std::unique_ptr<SentLog> sent;
+  std::unique_ptr<bayan::DocumentSession> session;
+  QList<QJsonObject> partQueries;
+
+  PartialTree() = default;
+  PartialTree(const PartialTree &) = delete;
+  PartialTree &operator=(const PartialTree &) = delete;
+  PartialTree(PartialTree &&) = delete;
+  PartialTree &operator=(PartialTree &&) = delete;
+  ~PartialTree() {
+    session.reset();
+    sent.reset();
+    engine.reset();
+  }
+};
+
+// Paragraphs index from to index to - 1 of the document node, with the identifiers index + 2.
+QJsonArray paragraphs(int from, int to) {
+  QJsonArray list;
+  for (int index = from; index < to; ++index) {
+    list.append(QJsonObject{{u"id"_s, index + 2}, {u"role"_s, u"paragraph"_s}, {u"text"_s, u"Paragraph %1"_s.arg(index)}});
+  }
+  return list;
+}
+
+// The document node with child_count 7, holding the given run of its children; without children_start when start is negative.
+QJsonObject documentNode(int start, const QJsonArray &children) {
+  QJsonObject node{{u"id"_s, 1}, {u"role"_s, u"document"_s}, {u"name"_s, u"Test"_s}, {u"child_count"_s, 7}};
+  if (start >= 0) {
+    node.insert(u"children_start"_s, start);
+  }
+  if (!children.isEmpty()) {
+    node.insert(u"children"_s, children);
+  }
+  return node;
+}
+
+std::unique_ptr<PartialTree> sessionWithPartialTree() {
+  auto open = std::make_unique<PartialTree>();
+  open->engine = stubWith(u"query_a11y"_s, u"ignore"_s);
+  if (!open->engine) {
+    return nullptr;
+  }
+  open->sent = std::make_unique<SentLog>(*open->engine);
+  open->session = std::make_unique<bayan::DocumentSession>(*open->engine);
+  open->session->start();
+  if (!QTest::qWaitFor([&open] { return open->session->status() == Status::Ready && open->sent->lastIdOf(u"query.a11y"_s) > 0; })) {
+    return nullptr;
+  }
+  const QJsonObject answer{{u"doc_id"_s, 1}, {u"root"_s, documentNode(2, paragraphs(2, 5))}, {u"caret"_s, QJsonValue::Null}};
+  if (!deliver(*open->engine, replyTo(open->sent->lastIdOf(u"query.a11y"_s), answer), u"query.a11y"_s) ||
+      !QTest::qWaitFor([&open] { return open->sent->ofType(u"query.a11y"_s).size() == 3; })) {
+    return nullptr;
+  }
+  open->partQueries = open->sent->ofType(u"query.a11y"_s).mid(1);
+  return open;
+}
+
 } // namespace
 
 class TestDocumentSession final : public QObject {
@@ -285,6 +348,8 @@ private slots:
   void aLongEngineVersionBreaksTheProtocol();
   void theRestartNumberComesFromTheEngine();
   void aNodeWithManyChildrenIsLoadedInParts();
+  void partsThatDoNotAnswerTheirRangeEndTheEnginesUse();
+  void malformedAccessibilityChangesEndTheEnginesUseWhilePartsLoad();
   void sendsTheAccessibilityTreeOrNone();
   void textInputChangesTheLineTheOverlayAndTheTree();
   void refusedInputIsReported();
@@ -583,6 +648,12 @@ void TestDocumentSession::violationsEndTheEnginesUse() {
     deep =
         QJsonObject{{u"id"_s, level}, {u"role"_s, u"paragraph"_s}, {u"text"_s, QString::number(level)}, {u"children"_s, QJsonArray{deep}}};
   }
+  // A change of an a11y.update whose node is this value: its node and identifier are checked before anything else (§14.1 item 5).
+  const auto changeTo = [&documentEvent](const QJsonValue &node) {
+    return documentEvent(
+        u"a11y.update"_s,
+        QJsonObject{{u"changes"_s, QJsonArray{QJsonObject{{u"kind"_s, u"replace"_s}, {u"node"_s, node}}}}, {u"caret"_s, QJsonValue::Null}});
+  };
   const QJsonObject deepUpdate =
       documentEvent(u"a11y.update"_s,
                     QJsonObject{
@@ -638,6 +709,26 @@ void TestDocumentSession::violationsEndTheEnginesUse() {
           .brokenAt = {},
       },
       {.why = u"an accessibility tree 65 levels deep"_s, .message = deepUpdate, .brokenAt = {}},
+      {
+          .why = u"a change whose node is not an object"_s,
+          .message = changeTo(QJsonValue(u"paragraph"_s)),
+          .brokenAt = u"/payload/changes/0/node"_s,
+      },
+      {
+          .why = u"a change whose node's identifier is a string"_s,
+          .message = changeTo(QJsonObject{{u"id"_s, u"2"_s}, {u"role"_s, u"paragraph"_s}}),
+          .brokenAt = u"/payload/changes/0/node/id"_s,
+      },
+      {
+          .why = u"a change whose node's identifier is 0"_s,
+          .message = changeTo(QJsonObject{{u"id"_s, 0}, {u"role"_s, u"paragraph"_s}}),
+          .brokenAt = {},
+      },
+      {
+          .why = u"a change whose node's identifier is 2^53"_s,
+          .message = changeTo(QJsonObject{{u"id"_s, qint64{9'007'199'254'740'992}}, {u"role"_s, u"paragraph"_s}}),
+          .brokenAt = {},
+      },
   };
   for (const Violation &violation : violations) {
     const auto open = openSession();
@@ -788,6 +879,70 @@ void TestDocumentSession::aNodeWithManyChildrenIsLoadedInParts() {
   QTest::qWait(100);
   QCOMPARE(sent.ofType(u"query.a11y"_s).size(), 4);
   QCOMPARE(session.status(), Status::Ready);
+}
+
+void TestDocumentSession::partsThatDoNotAnswerTheirRangeEndTheEnginesUse() {
+  if (!isStub()) {
+    QSKIP("Needs the stub's query_a11y test switch, so that the test answers query.a11y itself.");
+  }
+  // The answer to query.a11y with a children range holds the child at the range's start whenever the node has one (engine protocol §14.7
+  // item 1), and fits the tree that the session holds, since the engine answers in order with its a11y.update events. An answer that does
+  // neither breaks the protocol (§14.1 item 5): asking again would bring the same answer for ever, so the session stops using the engine.
+  struct Answer {
+    QString why;
+    QJsonObject root;
+  };
+  QJsonArray reused = paragraphs(0, 2);
+  reused.replace(0, QJsonObject{{u"id"_s, 5}, {u"role"_s, u"paragraph"_s}, {u"text"_s, u"Paragraph 3 again"_s}});
+  for (const Answer &item : {
+           Answer{.why = u"an answer without the child at the range's start"_s, .root = documentNode(-1, {})},
+           Answer{
+               .why = u"an answer whose run starts elsewhere, with children the session holds"_s,
+               .root = documentNode(2, paragraphs(2, 5)),
+           },
+           Answer{.why = u"a part with an identifier that the tree holds elsewhere"_s, .root = documentNode(0, reused)},
+       }) {
+    const auto open = sessionWithPartialTree();
+    QVERIFY2(open, qPrintable(item.why));
+    bayan::DocumentSession &session = *open->session;
+    const QJsonObject query = open->partQueries.first();
+    QCOMPARE(query.value(u"payload"_s).toObject().value(u"children"_s).toObject(), (QJsonObject{{u"start"_s, 0}, {u"count"_s, 2}}));
+    const QJsonObject answer{{u"doc_id"_s, 1}, {u"root"_s, item.root}, {u"caret"_s, QJsonValue::Null}};
+    QVERIFY2(deliver(*open->engine, replyTo(query.value(u"id"_s).toInteger(), answer), u"query.a11y"_s), qPrintable(item.why));
+    QTRY_VERIFY2(session.status() == Status::Failed, qPrintable(item.why));
+    QCOMPARE(session.message(), stopped);
+    QCOMPARE(open->sent->ofType(u"query.a11y"_s).size(), 3);
+    expectNothingSent(*open->engine, session);
+  }
+}
+
+void TestDocumentSession::malformedAccessibilityChangesEndTheEnginesUseWhilePartsLoad() {
+  if (!isStub()) {
+    QSKIP("Needs the stub's query_a11y test switch, so that the test answers query.a11y itself.");
+  }
+  // While parts of the tree are still being loaded, a change to a node that the tree does not hold yet waits for the part's answer; a
+  // change whose node has no identifier in the protocol's range breaks the protocol all the same (engine protocol §14.1 item 5).
+  const auto update = [](const QJsonObject &node) {
+    return engineEvent(u"a11y.update"_s, QJsonObject{
+                                             {u"doc_id"_s, 1},
+                                             {u"changes"_s, QJsonArray{QJsonObject{{u"kind"_s, u"replace"_s}, {u"node"_s, node}}}},
+                                             {u"caret"_s, QJsonValue::Null},
+                                         });
+  };
+  const QJsonObject unknown{{u"id"_s, 99}, {u"role"_s, u"paragraph"_s}, {u"text"_s, u"In a part"_s}};
+  for (const qint64 id : {qint64{0}, qint64{9'007'199'254'740'992}}) {
+    const auto open = sessionWithPartialTree();
+    QVERIFY(open);
+    bayan::DocumentSession &session = *open->session;
+    QVERIFY(session.loadingAccessibilityParts());
+    QVERIFY(deliver(*open->engine, update(unknown)));
+    QTest::qWait(100);
+    QCOMPARE(session.status(), Status::Ready);
+    QVERIFY(deliver(*open->engine, update(QJsonObject{{u"id"_s, id}, {u"role"_s, u"paragraph"_s}, {u"text"_s, u"Broken"_s}})));
+    QTRY_VERIFY2(session.status() == Status::Failed, qPrintable(QString::number(id)));
+    QCOMPARE(session.message(), stopped);
+    expectNothingSent(*open->engine, session);
+  }
 }
 
 void TestDocumentSession::sendsTheAccessibilityTreeOrNone() {

@@ -163,8 +163,9 @@ public:
   // Set when an accessibility interface for the canvas exists, which means a screen reader or a test is looking; until then the canvas
   // does not spend time reporting text changes.
   void setAccessibleInterfaceActive(bool active) { accessibleInterfaceActive_ = active; }
-  // Deletes text next to the caret, counted in UTF-16 code units, with Backspace and Delete keys: protocol v1 has no message that deletes
-  // a range, so input methods and accessibility edits that replace text use this (see ImeTranslator). Deletes no more than the editable
+  // Deletes text next to the caret, counted in UTF-16 code units, with Backspace and Delete keys: the engine at the pinned core has no
+  // message that deletes a range yet (engine protocol §14.4 adds one: CORE-014, DESK-005), so input methods and accessibility edits that
+  // replace text use this (see ImeTranslator). Deletes no more than the editable
   // text at the caret holds, and nothing without one.
   void deleteAroundCaret(int unitsBefore, int unitsAfter);
 

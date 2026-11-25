@@ -950,7 +950,7 @@ void TestCanvas::accessibilityExposesTheDocumentText() {
   QCOMPARE(accessible->text(QAccessible::Name), u"BayanDocs mock document"_s);
   const QAccessible::State state = accessible->state();
   QVERIFY(state.focusable && state.focused && state.editable && state.multiLine);
-  QVERIFY(!state.selectableText); // Protocol v1 has no selection to offer.
+  QVERIFY(!state.selectableText); // The engine at the pinned core offers no selection yet.
   QVERIFY(accessible->parent() != nullptr);
   QAccessibleTextInterface *text = accessible->textInterface();
   QVERIFY(text != nullptr && accessible->editableTextInterface() != nullptr);

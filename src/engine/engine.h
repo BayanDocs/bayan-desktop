@@ -67,7 +67,8 @@ public:
   // Identifiers increase with every request, so they also count the requests in the order they were posted.
   qint64 request(const QString &type, const QJsonObject &payload = {});
 
-  // The identifier of the last request that was posted successfully, or 0. Any thread may read it.
+  // The identifier of the last request that was posted successfully, or 0. Any thread may read it. Only tests use it, to see whether the
+  // session sent anything.
   [[nodiscard]] qint64 lastPostedRequest() const { return lastPostedRequest_.load(std::memory_order_acquire); }
 
   // Copies bytes into a new engine blob. Returns 0 on failure.

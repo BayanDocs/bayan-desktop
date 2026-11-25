@@ -13,8 +13,7 @@
 //   and its range, here, before it is used; a message that breaks the protocol stops the session's use of the engine with the stop message,
 //   without a new session.
 // - Revisions (§14.6): the regions of render.invalidate come with the document's render revision after the change, which the canvas
-// compares
-//   with each tile's own; nothing depends on the order of tiles and events.
+//   compares with each tile's own; nothing depends on the order of tiles and events.
 // - The accessibility tree (§14.7 item 1): one beyond the protocol's limits breaks the protocol; a node given with only a part of its
 //   children has the rest loaded at once with query.a11y and children ranges, so that screen readers get the whole document.
 //
