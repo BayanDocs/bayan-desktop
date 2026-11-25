@@ -8,6 +8,8 @@
 #include <QtCore/QJsonValue>
 #include <QtCore/QMetaObject>
 
+#include <cmath>
+#include <limits>
 #include <utility>
 
 using namespace Qt::StringLiterals;
@@ -15,7 +17,23 @@ using namespace Qt::StringLiterals;
 namespace bayan {
 namespace {
 
+// The largest identifier, sequence number and revision of the protocol: below 2^53, so that JavaScript numbers hold them exactly (§4).
+constexpr qint64 kMaxExactInteger = static_cast<qint64>(quint64{1} << 53U) - 1;
+
 QByteArray toCompactJson(const QJsonObject &object) { return QJsonDocument(object).toJson(QJsonDocument::Compact); }
+
+// Whether a JSON value is a number with an exact integer value from minimum to maximum.
+bool isInteger(const QJsonValue &value, qint64 minimum, qint64 maximum) {
+  if (!value.isDouble()) {
+    return false;
+  }
+  const double number = value.toDouble();
+  if (!std::isfinite(number) || std::trunc(number) != number || std::abs(number) > static_cast<double>(kMaxExactInteger)) {
+    return false;
+  }
+  const qint64 integer = value.toInteger(std::numeric_limits<qint64>::min());
+  return integer >= minimum && integer <= maximum;
+}
 
 // The C interface passes UTF-8 as bytes; Qt stores it as char.
 const std::uint8_t *bytesOf(const QByteArray &data) {
@@ -57,7 +75,13 @@ QString Engine::version() { return QString::fromUtf8(bayan_version()); }
 
 bool Engine::send(const QJsonObject &envelope) {
   const QByteArray json = toCompactJson(envelope);
-  return bayan_engine_post(handle_.get(), bytesOf(json), static_cast<std::size_t>(json.size())) == BAYAN_STATUS_OK;
+  if (bayan_engine_post(handle_.get(), bytesOf(json), static_cast<std::size_t>(json.size())) != BAYAN_STATUS_OK) {
+    return false;
+  }
+  if (sentObserver_) {
+    sentObserver_(envelope);
+  }
+  return true;
 }
 
 bool Engine::post(const QString &type, const QJsonObject &payload) {
@@ -67,12 +91,16 @@ bool Engine::post(const QString &type, const QJsonObject &payload) {
 qint64 Engine::request(const QString &type, const QJsonObject &payload) {
   const qint64 id = nextRequestId_++;
   const bool panic = !panicOnRequestType_.isEmpty() && type == panicOnRequestType_;
+  // Recorded before posting, because the reply may arrive before send() returns (it is queued for this thread, so it is never handled
+  // before), and forgotten again if the engine refused the message.
+  pending_.emplace(id, !panic && type == u"hello"_s);
   if (!send(QJsonObject{
           {u"v"_s, kProtocolVersion},
           {u"id"_s, id},
           {u"type"_s, panic ? u"diag.panic"_s : type},
           {u"payload"_s, panic ? QJsonObject() : payload},
       })) {
+    pending_.erase(id);
     return 0;
   }
   // Published only after the engine has queued the message, so a thread that reads it and then renders a tile is ordered after it.
@@ -106,7 +134,7 @@ std::optional<QByteArray> Engine::blob(BlobId id) {
 
 bool Engine::releaseBlob(BlobId id) { return bayan_blob_release(handle_.get(), id) == BAYAN_STATUS_OK; }
 
-QImage Engine::renderTile(const QJsonObject &request, QSize pixelSize) {
+Engine::Tile Engine::renderTile(const QJsonObject &request, QSize pixelSize) {
   if (pixelSize.width() <= 0 || pixelSize.height() <= 0 || pixelSize.width() > kMaxTileSide || pixelSize.height() > kMaxTileSide) {
     return {};
   }
@@ -115,11 +143,22 @@ QImage Engine::renderTile(const QJsonObject &request, QSize pixelSize) {
     return {};
   }
   const QByteArray json = toCompactJson(request);
+  std::uint64_t revision = 0;
   const BayanStatus status =
       bayan_render_tile(handle_.get(), bytesOf(json), static_cast<std::size_t>(json.size()), image.bits(),
                         static_cast<std::size_t>(image.sizeInBytes()), static_cast<std::uint32_t>(pixelSize.width()),
-                        static_cast<std::uint32_t>(pixelSize.height()), static_cast<std::size_t>(image.bytesPerLine()));
-  return status == BAYAN_STATUS_OK ? image : QImage();
+                        static_cast<std::uint32_t>(pixelSize.height()), static_cast<std::size_t>(image.bytesPerLine()), &revision);
+  if (status != BAYAN_STATUS_OK) {
+    return {};
+  }
+  // A render revision is a positive integer below 2^53 (engine protocol §14.6). This may run on any thread, so the violation is reported to
+  // this object's thread, which stops using the engine.
+  if (revision == 0 || revision > static_cast<std::uint64_t>(kMaxExactInteger)) {
+    QMetaObject::invokeMethod(
+        this, [this] { emit protocolError(u"The engine rendered a tile with a revision out of range."_s); }, Qt::QueuedConnection);
+    return {};
+  }
+  return {.image = image, .revision = revision};
 }
 
 void Engine::deliverFromEngineThread(const std::uint8_t *json, std::size_t length) noexcept {
@@ -149,36 +188,54 @@ void Engine::dispatch(const QByteArray &json) {
     emit protocolError(u"The engine sent a message that is not a JSON object."_s);
     return;
   }
+  // The envelope (engine protocol §4, §14.1 item 5). Every field the shell reads must have the type, and the range, that the protocol gives
+  // it; a message without v, or with a payload that is not an object, is no protocol message at all.
   const QJsonObject message = document.object();
-  if (message.value(u"v"_s).toInteger(-1) != kProtocolVersion) {
-    emit protocolError(u"The engine sent a message for another protocol version."_s);
+  const QJsonValue version = message.value(u"v"_s);
+  const QJsonValue type = message.value(u"type"_s);
+  const QJsonValue payload = message.value(u"payload"_s);
+  if (!isInteger(version, 0, kMaxExactInteger) || (!type.isUndefined() && !type.isString()) ||
+      (!payload.isUndefined() && !payload.isObject())) {
+    emit protocolError(u"The engine sent a message with a malformed envelope."_s);
     return;
   }
+  const bool currentVersion = version.toInteger() == kProtocolVersion;
   const QJsonValue replyTo = message.value(u"re"_s);
   if (!replyTo.isUndefined()) {
-    const qint64 requestId = replyTo.toInteger(0);
     const QJsonValue ok = message.value(u"ok"_s);
-    if (requestId <= 0 || !ok.isBool()) {
+    const QJsonValue error = message.value(u"error"_s);
+    if (!isInteger(replyTo, 1, kMaxExactInteger) || !ok.isBool() ||
+        (!ok.toBool() && (!error.isObject() || !error.toObject().value(u"code"_s).isString()))) {
       emit protocolError(u"The engine sent a malformed reply."_s);
       return;
     }
-    // The engine handles requests in the order they were posted and answers each (engine protocol §8), so replies answer requests that
-    // were posted, in increasing order. The session decides which request caused an event by the last reply; a reply to anything else
-    // would make it judge every tile stale for good.
-    if (requestId <= lastReply_ || requestId > lastPostedRequest()) {
+    // Each request is answered once. A reply that answers no request waiting for one breaks the protocol; one to a request of an earlier
+    // session still answers a request that was posted, and the session ignores it (engine protocol §12.1 step 4).
+    const qint64 requestId = replyTo.toInteger();
+    const auto request = pending_.find(requestId);
+    if (request == pending_.end()) {
       emit protocolError(u"The engine sent a reply to a request it was not answering."_s);
       return;
     }
-    lastReply_ = requestId;
-    emit replyReceived(requestId, ok.toBool(), message.value(u"payload"_s).toObject(), message.value(u"error"_s).toObject());
+    // Only the reply to a hello may carry another version: that is how an engine that speaks other versions refuses it (§14.1 item 1).
+    const bool hello = request->second;
+    pending_.erase(request);
+    if (!currentVersion && !hello) {
+      emit protocolError(u"The engine sent a message for another protocol version."_s);
+      return;
+    }
+    emit replyReceived(requestId, ok.toBool(), payload.toObject(), error.toObject());
     return;
   }
-  const QString type = message.value(u"type"_s).toString();
-  if (type.isEmpty()) {
-    emit protocolError(u"The engine sent a message without a type."_s);
+  if (!currentVersion) {
+    emit protocolError(u"The engine sent a message for another protocol version."_s);
     return;
   }
-  emit eventReceived(type, message.value(u"payload"_s).toObject());
+  if (type.toString().isEmpty() || !isInteger(message.value(u"seq"_s), 1, kMaxExactInteger)) {
+    emit protocolError(u"The engine sent an event without a type or a sequence number."_s);
+    return;
+  }
+  emit eventReceived(type.toString(), payload.toObject());
 }
 
 } // namespace bayan

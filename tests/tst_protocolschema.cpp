@@ -16,7 +16,7 @@ namespace {
 const ProtocolSchema &schema() { return ProtocolSchema::engineProtocol(); }
 
 QJsonObject engineEvent(const QString &type, const QJsonObject &payload) {
-  return QJsonObject{{u"v"_s, 0}, {u"type"_s, type}, {u"seq"_s, 7}, {u"payload"_s, payload}};
+  return QJsonObject{{u"v"_s, 1}, {u"type"_s, type}, {u"seq"_s, 7}, {u"payload"_s, payload}};
 }
 
 // engine.error as bayan-core's engine sends it after a panic (engine protocol §12).
@@ -61,6 +61,7 @@ private slots:
   void rejectsAFieldOfTheWrongType();
   void rejectsAnUnknownFieldWhereTheSchemaForbidsOne();
   void rejectsWhatTheEngineNeverSends();
+  void checksTreesAsDeepAsTheProtocolAllows();
   void checksRepliesAgainstTheirRequest();
   void checksTheTypeOfEachReply();
   void numbersFollowTheirRustTypes();
@@ -86,7 +87,7 @@ void TestProtocolSchema::loadsTheEngineProtocolSchema() {
 void TestProtocolSchema::acceptsTheEnginesMessages() {
   QCOMPARE(schema().problemsOfMessageFromEngine(engineEvent(u"engine.error"_s, panicError())), QStringList());
   const QJsonObject welcome{
-      {u"v"_s, 0},
+      {u"v"_s, 1},
       {u"re"_s, 1},
       {u"ok"_s, true},
       {u"type"_s, u"welcome"_s},
@@ -102,7 +103,7 @@ void TestProtocolSchema::acceptsTheEnginesMessages() {
   };
   QCOMPARE(schema().problemsOfMessageFromEngine(welcome, u"hello"_s), QStringList());
   const QJsonObject refused{
-      {u"v"_s, 0},
+      {u"v"_s, 1},
       {u"re"_s, 2},
       {u"ok"_s, false},
       {
@@ -185,31 +186,48 @@ void TestProtocolSchema::rejectsAnUnknownFieldWhereTheSchemaForbidsOne() {
 void TestProtocolSchema::rejectsWhatTheEngineNeverSends() {
   // A request is a message to the engine, never from it.
   const QJsonObject hello{
-      {u"v"_s, 0},
+      {u"v"_s, 1},
       {u"id"_s, 1},
       {u"type"_s, u"hello"_s},
-      {u"payload"_s, QJsonObject{{u"protocol_versions"_s, QJsonArray{0}}}},
+      {u"payload"_s, QJsonObject{{u"protocol_versions"_s, QJsonArray{1}}}},
   };
   QVERIFY(!schema().problemsOfMessageFromEngine(hello).isEmpty());
-  // An event type that protocol v0 does not have (diag.log is planned, not defined).
+  // An event type that protocol v1 does not have (diag.log is planned, not defined).
   QVERIFY(!schema().problemsOfMessageFromEngine(engineEvent(u"diag.log"_s, QJsonObject{{u"level"_s, u"info"_s}})).isEmpty());
   // An event without its sequence number, and one for another protocol version.
   QJsonObject unnumbered = engineEvent(u"engine.error"_s, panicError());
   unnumbered.remove(u"seq"_s);
   QVERIFY(!schema().problemsOfMessageFromEngine(unnumbered).isEmpty());
   QJsonObject future = engineEvent(u"engine.error"_s, panicError());
-  future.insert(u"v"_s, 1);
+  future.insert(u"v"_s, 2);
   QVERIFY(!schema().problemsOfMessageFromEngine(future).isEmpty());
   // A reply without its payload, which a successful reply always has.
-  QVERIFY(!schema().problemsOfMessageFromEngine(QJsonObject{{u"v"_s, 0}, {u"re"_s, 1}, {u"ok"_s, true}}, u"view.set"_s).isEmpty());
+  QVERIFY(!schema().problemsOfMessageFromEngine(QJsonObject{{u"v"_s, 1}, {u"re"_s, 1}, {u"ok"_s, true}}, u"view.set"_s).isEmpty());
   // A page list that is not a list.
   QVERIFY(!schema()
                .problemsOfMessageFromEngine(engineEvent(u"view.pages"_s, QJsonObject{{u"doc_id"_s, 1}, {u"pages"_s, u"three"_s}}))
                .isEmpty());
 }
 
+void TestProtocolSchema::checksTreesAsDeepAsTheProtocolAllows() {
+  // An accessibility tree may be 64 levels deep (engine protocol §14.7 item 1), and tests hand the shell trees one level deeper to see it
+  // refuse them: the checker checks both. A message nested far deeper than any the protocol allows is refused rather than checked.
+  const auto update = [](int levels) {
+    QJsonObject node{{u"id"_s, levels}, {u"role"_s, u"paragraph"_s}, {u"text"_s, u"leaf"_s}};
+    for (int level = levels - 1; level >= 1; --level) {
+      node = QJsonObject{{u"id"_s, level}, {u"role"_s, level == 1 ? u"document"_s : u"list_item"_s}, {u"children"_s, QJsonArray{node}}};
+    }
+    const QJsonObject change{{u"kind"_s, u"replace"_s}, {u"node"_s, node}};
+    return engineEvent(u"a11y.update"_s, QJsonObject{{u"doc_id"_s, 1}, {u"changes"_s, QJsonArray{change}}, {u"caret"_s, QJsonValue::Null}});
+  };
+  QCOMPARE(schema().problemsOfMessageFromEngine(update(64)), QStringList());
+  QCOMPARE(schema().problemsOfMessageFromEngine(update(65)), QStringList());
+  const QStringList tooDeep = schema().problemsOfMessageFromEngine(update(200));
+  QVERIFY(std::ranges::any_of(tooDeep, [](const QString &problem) { return problem.contains(u"nests more than 400 levels deep"_s); }));
+}
+
 void TestProtocolSchema::checksRepliesAgainstTheirRequest() {
-  const QJsonObject empty{{u"v"_s, 0}, {u"re"_s, 3}, {u"ok"_s, true}, {u"payload"_s, QJsonObject{}}};
+  const QJsonObject empty{{u"v"_s, 1}, {u"re"_s, 3}, {u"ok"_s, true}, {u"payload"_s, QJsonObject{}}};
   QCOMPARE(schema().problemsOfMessageFromEngine(empty, u"view.set"_s), QStringList());
   // Without the request's type the payload could not be checked, so the reply is refused.
   QVERIFY(!schema().problemsOfMessageFromEngine(empty).isEmpty());
@@ -222,20 +240,21 @@ void TestProtocolSchema::checksTheTypeOfEachReply() {
   // A successful reply carries the type that x-bayan-messages gives the reply to its request (reply_type), and none where it gives none,
   // as bayan-core's engine sends it (Outbox::reply) and the stub does.
   const auto reply = [](const QJsonObject &payload, const QJsonValue &type) {
-    QJsonObject message{{u"v"_s, 0}, {u"re"_s, 1}, {u"ok"_s, true}, {u"payload"_s, payload}};
+    QJsonObject message{{u"v"_s, 1}, {u"re"_s, 1}, {u"ok"_s, true}, {u"payload"_s, payload}};
     if (!type.isUndefined()) {
       message.insert(u"type"_s, type);
     }
     return message;
   };
   const QJsonObject welcome{
-      {u"protocol_version"_s, 0},
+      {u"protocol_version"_s, 1},
       {u"engine_version"_s, u"0.1.0"_s},
       {u"layout_epoch"_s, 0},
       {u"features"_s, QJsonArray{u"mock_document"_s}},
   };
   const QJsonObject opened{
       {u"doc_id"_s, 1},
+      {u"revision"_s, 1},
       {u"page_count_estimate"_s, 1},
       {u"warnings"_s, QJsonArray{}},
       {u"fonts"_s, QJsonObject{{u"missing"_s, QJsonArray{}}, {u"machine_dependent"_s, false}}},

@@ -39,8 +39,10 @@ using Problems = QList<Problem>;
 constexpr QStringView kDraft = u"https://json-schema.org/draft/2020-12/schema";
 // Where a $ref may point: the schema's own definitions.
 constexpr QStringView kDefinitionsPrefix = u"#/$defs/";
-// Nested checks beyond this depth are refused, so that no schema or message can exhaust the stack.
-constexpr int kMaxDepth = 200;
+// Nested checks beyond this depth are refused, so that no schema or message can exhaust the stack. The deepest message the protocol allows,
+// an accessibility tree of 64 levels (engine protocol §14.7 item 1), takes three nested checks per level and a dozen for the envelope, and
+// a test must also be able to hand the shell a tree one level deeper.
+constexpr int kMaxDepth = 400;
 // The formats the checker knows: those the generator gives Rust's number types.
 constexpr std::array<QStringView, 6> kFormats{u"uint8", u"uint32", u"uint64", u"int32", u"int64", u"double"};
 // The names of JSON Schema's types.

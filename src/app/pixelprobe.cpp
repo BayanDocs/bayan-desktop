@@ -74,7 +74,7 @@ std::optional<QString> compareWithEnginePixels(const DocumentCanvas &canvas, con
           {u"width"_s, 1},
           {u"height"_s, 1},
       };
-      const QImage expected = session->engine().renderTile(request, QSize(1, 1));
+      const QImage expected = session->engine().renderTile(request, QSize(1, 1)).image;
       if (expected.isNull()) {
         return u"the engine refused to render a probe pixel"_s;
       }

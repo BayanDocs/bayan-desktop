@@ -1,6 +1,7 @@
 #include "documentcanvas.h"
 
 #include "canvasaccessible.h"
+#include "keybindings.h"
 #include "keymapping.h"
 
 #include <QtCore/QMetaObject>
@@ -134,10 +135,8 @@ void DocumentCanvas::setSession(DocumentSession *session) {
     disconnect(session_, nullptr, this, nullptr);
   }
   renderer_.reset();
-  // The tiles, and the changes remembered for them, belong to the old session's engine; another engine numbers its requests from 1 again.
-  cache_.reset();
-  wantedSince_.clear();
-  visibleSince_.clear();
+  // The tiles, and the changes remembered for them, belong to the old session's document.
+  forgetDocument();
   tilePages_.clear();
   ime_.reset();
   compositionContext_.reset();
@@ -145,6 +144,7 @@ void DocumentCanvas::setSession(DocumentSession *session) {
   if (session_ != nullptr) {
     startRenderer();
     connect(session_, &DocumentSession::pagesChanged, this, &DocumentCanvas::onPagesChanged);
+    connect(session_, &DocumentSession::documentClosed, this, &DocumentCanvas::forgetDocument);
     connect(session_, &DocumentSession::invalidated, this, &DocumentCanvas::onInvalidated);
     connect(session_, &DocumentSession::overlayChanged, this, &DocumentCanvas::onOverlayChanged);
     connect(session_, &DocumentSession::accessibilityChanged, this, &DocumentCanvas::onAccessibilityChanged);
@@ -158,9 +158,7 @@ void DocumentCanvas::setSession(DocumentSession *session) {
     // A session destroyed first takes its engine's use with it: stop the tile thread at once (session_ is already null by then).
     connect(session_, &QObject::destroyed, this, [this] {
       renderer_.reset();
-      cache_.reset();
-      wantedSince_.clear();
-      visibleSince_.clear();
+      forgetDocument();
       viewChanged();
       emit sessionChanged();
     });
@@ -415,7 +413,18 @@ void DocumentCanvas::deleteAroundCaret(int unitsBefore, int unitsAfter) {
   }
 }
 
+void DocumentCanvas::forgetDocument() {
+  ++generation_;
+  shownDocument_ = session_ != nullptr ? session_->documentId() : 0;
+  cache_.reset();
+  wantedSince_.clear();
+  visibleSince_.clear();
+}
+
 void DocumentCanvas::onPagesChanged() {
+  if (session_ != nullptr && session_->documentId() != shownDocument_) {
+    forgetDocument();
+  }
   const std::vector<protocol::Page> pages = session_ != nullptr ? session_->pages() : std::vector<protocol::Page>{};
   if (pages != tilePages_) {
     // Tiles are cut from the pages' sizes; new pages need new tiles.
@@ -429,13 +438,13 @@ void DocumentCanvas::onPagesChanged() {
   viewChanged();
 }
 
-void DocumentCanvas::onInvalidated(const std::vector<protocol::PageRect> &regions, qint64 cause) {
+void DocumentCanvas::onInvalidated(const std::vector<protocol::PageRect> &regions, quint64 revision) {
   std::map<int, std::vector<protocol::BluRect>> perPage;
   for (const protocol::PageRect &region : regions) {
     perPage[region.page].push_back(region.rect);
   }
   for (const auto &[page, rects] : perPage) {
-    cache_.invalidate(page, rects, cause);
+    cache_.invalidate(page, rects, revision);
   }
   viewChanged();
 }
@@ -487,7 +496,11 @@ void DocumentCanvas::onTileRendered(const TileRenderer::Result &result) {
   } else {
     ++statistics_.tilesRendered;
   }
-  cache_.deliver(result.key, result.image, result.renderedAfter);
+  // A tile of an earlier document could otherwise pass for one of the new document, whose revisions start again.
+  if (result.generation != generation_) {
+    return;
+  }
+  cache_.deliver(result.key, result.image, result.revision);
   wantedSince_.erase(result.key);
   polish();
 }
@@ -538,7 +551,8 @@ void DocumentCanvas::sendView() {
     return;
   }
   // The engine converts pointer positions with this zoom, and lays out what the viewport shows first (engine protocol §6.2). Scrolling
-  // alone does not send view.set: the v0 engine answers every view.set by invalidating every page (the DESK-002 report discusses this).
+  // alone does not send view.set. In print mode a new view invalidates nothing (§14.6 item 2): the canvas asks for the tiles of a new
+  // scale by itself, because tiles are keyed by their scale.
   const ViewGeometry view = geometry();
   session_->setView({.viewport = view.viewport(), .zoom = tileZoom_, .deviceScale = devicePixelRatio_});
 }
@@ -727,6 +741,7 @@ TileRenderer::Job DocumentCanvas::renderJob(const protocol::Page &page, const Ti
               {u"mode"_s, u"interactive"_s},
           },
       .pixels = QSize(static_cast<int>(pixels.width), static_cast<int>(pixels.height)),
+      .generation = generation_,
       .wanted = wantedSince_.try_emplace(key, now).first->second,
   };
 }
@@ -807,26 +822,32 @@ void DocumentCanvas::reportCompleteness(bool complete) {
 }
 
 void DocumentCanvas::keyPressEvent(QKeyEvent *event) {
-  // While a document is open, every key but Tab goes to the engine as input.key, with its modifiers: Page Up, Page Down, Home, End and the
-  // arrows, but also the function keys and Control with A, V, =, - or 0, which the shell no longer keeps for zooming; a key that types text
-  // goes as input.text as well, unless an input method is composing. The web shell does not do the same today: it sends twelve editing keys
-  // and the shortcuts of the engine's manifest, and typed text only as input.text (architecture review of 2026-11-20, H8). Engine protocol
-  // v1 makes the two shells agree (§14.3 of docs/specs/engine-protocol.md): each sends a press as input.key if and only if it matches a
-  // binding of a command without shell_action or a document key, matches no reserved key, and no input method is composing with it, and
-  // sends typed text only as input.text; DESK-004 moves the desktop to it. Tab moves the keyboard focus out of the canvas, so the keyboard
-  // never gets stuck in it (ADR-0020 §5); the document area before it scrolls with the keys, and the zoom buttons zoom.
-  if (event->key() == Qt::Key_Tab || event->key() == Qt::Key_Backtab || session_ == nullptr || session_->documentId() <= 0) {
+  // Engine protocol §14.3, as the web shell does it: a press goes to the engine as input.key exactly when it matches a binding of the UI
+  // manifest's commands without shell_action, or a document key, matches no reserved key, and no input method is composing with it
+  // (KeyBindings, from the engine's key data for this platform and runtime). Typed text goes as input.text, never as input.key. Every other
+  // press goes on to Qt and the shell's own interface: Tab moves the keyboard focus out of the canvas, so the keyboard never gets stuck in
+  // it (ADR-0020 §5); the clipboard keys stay with Qt until DESK-005 wires them to the clipboard; and keys that no manifest binds yet, such
+  // as Control with =, - and 0 for zooming, do nothing here (§14.9: the document area before the canvas scrolls with the keys, and the zoom
+  // buttons zoom).
+  if (session_ == nullptr || session_->documentId() <= 0) {
     event->ignore();
     return;
   }
   const KeyMappingOptions options = KeyMappingOptions::forPlatform();
-  session_->sendKey(keyInput(*event, ime_.composing(), options));
+  const protocol::KeyInput press = keyInput(*event, ime_.composing(), options);
+  if (session_->keyBindings().sends(press)) {
+    session_->sendKey(press);
+    event->accept();
+    return;
+  }
   if (!ime_.composing()) {
     if (const auto text = typedText(*event, options)) {
       session_->sendText(*text);
+      event->accept();
+      return;
     }
   }
-  event->accept();
+  event->ignore();
 }
 
 void DocumentCanvas::performImeAction(const ImeAction &action) {
@@ -996,7 +1017,7 @@ void DocumentCanvas::mouseDoubleClickEvent(QMouseEvent *event) {
 }
 
 void DocumentCanvas::mouseMoveEvent(QMouseEvent *event) {
-  // Only moves while a button is held: v0 has no hover feedback, and every move is a message.
+  // Only moves while a button is held: v1 has no hover feedback, and every move is a message.
   if (pressedButtons_ != Qt::NoButton) {
     sendPointer(protocol::PointerKind::Move, *event);
   }

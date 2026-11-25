@@ -8,6 +8,12 @@ if(BAYAN_ENGINE STREQUAL "stub")
   # The stub runs its own thread.
   find_package(Threads REQUIRED)
   target_link_libraries(bayan_engine_c PRIVATE Threads::Threads)
+  # The stub's ui.manifest takes the key data that bayan-core's engine resolves for each platform and runtime from the copy of the conformance
+  # vectors (engine protocol §14.3, §15), compiled in as the resource :/bayan/stub/keys.json.
+  qt_add_resources(bayan_engine_c stub_manifest
+    PREFIX "/bayan/stub"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/stub/schema/conformance"
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/stub/schema/conformance/keys.json")
 elseif(BAYAN_ENGINE STREQUAL "sdk")
   # The real engine from bayan-core's C SDK (CORE-007), linked dynamically. README.md in this directory describes the SDK layout this expects.
   set(BAYAN_ENGINE_SDK_DIR "" CACHE PATH "Directory of the unpacked bayan-core C SDK (layout: src/engine/README.md)")

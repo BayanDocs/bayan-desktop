@@ -24,6 +24,11 @@ find_package(Threads REQUIRED)
 add_library(bayan_ffi SHARED "${desktop_dir}/src/engine/stub/bayan_engine_stub.cpp" "${desktop_dir}/src/engine/stub/include/bayan_ffi.h")
 target_include_directories(bayan_ffi PRIVATE "${desktop_dir}/src/engine/stub/include")
 target_link_libraries(bayan_ffi PRIVATE Qt6::Core Threads::Threads bayan::compile_options)
+# The stub's manifest data (src/engine/CMakeLists.txt).
+qt_add_resources(bayan_ffi stub_manifest
+  PREFIX "/bayan/stub"
+  BASE "${desktop_dir}/src/engine/stub/schema/conformance"
+  FILES "${desktop_dir}/src/engine/stub/schema/conformance/keys.json")
 if(WIN32)
   # MSVC exports nothing from a DLL unless told to; the .def file exports exactly the functions of bayan_ffi.h, as the real SDK does.
   target_sources(bayan_ffi PRIVATE bayan_ffi.def)
@@ -37,5 +42,7 @@ install(TARGETS bayan_ffi
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib)
 install(FILES "${desktop_dir}/src/engine/stub/include/bayan_ffi.h" DESTINATION include)
-# The real SDK also holds the protocol's JSON Schema, which the test engine.sdk_copies compares with the copy in src/engine/stub/schema.
+# The real SDK also holds the protocol's JSON Schema and, next to it, the conformance vectors (engine protocol §15), which the test
+# engine.sdk_copies compares with the copies in src/engine/stub/schema.
 install(FILES "${desktop_dir}/src/engine/stub/schema/engine-protocol.schema.json" DESTINATION schema)
+install(DIRECTORY "${desktop_dir}/src/engine/stub/schema/conformance/" DESTINATION schema/conformance FILES_MATCHING PATTERN "*.json")

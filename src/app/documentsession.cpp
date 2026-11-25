@@ -4,11 +4,12 @@
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonValue>
 #include <QtCore/QLocale>
-#include <QtCore/QSysInfo>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QStyleHints>
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <utility>
 
 using namespace Qt::StringLiterals;
@@ -16,13 +17,69 @@ using namespace Qt::StringLiterals;
 namespace bayan {
 namespace {
 
+// How many query.a11y requests for parts of the accessibility tree may wait for their answers at once; the rest follow as answers arrive.
+constexpr std::size_t kMaxPartRequests = 8;
+// The largest document identifier: below 2^53, like every identifier of the protocol (engine protocol §4).
+constexpr qint64 kMaxDocumentId = static_cast<qint64>(quint64{1} << 53U) - 1;
+
 QString themeName() { return QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark ? u"dark"_s : u"light"_s; }
 
 QJsonObject toJson(const QRectF &rect) {
   return QJsonObject{{u"x"_s, rect.x()}, {u"y"_s, rect.y()}, {u"width"_s, rect.width()}, {u"height"_s, rect.height()}};
 }
 
+// The document identifier of a payload: a positive integer below 2^53, or 0 if it is not one.
+qint64 documentIdOf(const QJsonObject &payload) {
+  const QJsonValue value = payload.value(u"doc_id"_s);
+  const double number = value.toDouble(0);
+  if (!value.isDouble() || !std::isfinite(number) || std::trunc(number) != number || number < 1 ||
+      number > static_cast<double>(kMaxDocumentId)) {
+    return 0;
+  }
+  return value.toInteger();
+}
+
+// The stop message, after which the session sends the engine nothing more: the same after the engine stopped once its restarts were used
+// up, after it broke the protocol and after it refused the handshake (engine protocol §12.1 step 2, §14.1 items 3 and 5).
+QString stopMessage() { return DocumentSession::tr("The engine stopped. Close BayanDocs and open it again to restart the engine."); }
+
 } // namespace
+
+DocumentSession::OperatingSystem DocumentSession::operatingSystem() {
+#ifdef Q_OS_WIN
+  return OperatingSystem::Windows;
+#elif defined(Q_OS_MACOS)
+  return OperatingSystem::MacOS;
+#elif defined(Q_OS_IOS)
+  return OperatingSystem::IOS;
+#elif defined(Q_OS_ANDROID)
+  return OperatingSystem::Android;
+#elif defined(Q_OS_LINUX)
+  return OperatingSystem::Linux;
+#else
+  return OperatingSystem::Other;
+#endif
+}
+
+QString DocumentSession::platformName(OperatingSystem system) {
+  switch (system) {
+  case OperatingSystem::Windows:
+    return u"windows"_s;
+  case OperatingSystem::MacOS:
+    return u"macos"_s;
+  case OperatingSystem::Linux:
+    return u"linux"_s;
+  case OperatingSystem::IOS:
+    return u"ios"_s;
+  case OperatingSystem::Android:
+    return u"android"_s;
+  case OperatingSystem::ChromeOS:
+    return u"chromeos"_s;
+  case OperatingSystem::Other:
+    break;
+  }
+  return u"other"_s;
+}
 
 DocumentSession::DocumentSession(Engine &engine, QObject *parent) : QObject(parent), engine_(engine) {
   connect(&engine_, &Engine::replyReceived, this, &DocumentSession::onReply);
@@ -37,22 +94,33 @@ void DocumentSession::start() {
   startSession();
 }
 
+qint64 DocumentSession::request(const QString &type, const QJsonObject &payload) {
+  const qint64 id = engine_.request(type, payload);
+  if (id > 0) {
+    tracker_.sent(type, id);
+  }
+  return id;
+}
+
 void DocumentSession::startSession() {
+  // The operating system whose keyboard conventions apply, from Qt's knowledge of the system the app was built for, not its free-text
+  // product name, and the runtime: the engine uses them only to resolve the manifest's key bindings (engine protocol §14.1 item 2).
   const QJsonObject shell{
       {u"name"_s, u"bayan-desktop"_s},
       {u"version"_s, QCoreApplication::applicationVersion()},
-      {u"platform"_s, QSysInfo::productType()},
+      {u"platform"_s, platformName(operatingSystem())},
+      {u"runtime"_s, u"native"_s},
   };
   // The canvas forwards input-method composition and bridges the accessibility tree to the platform (DESK-002); no clipboard yet.
   const QJsonObject capabilities{{u"clipboard_formats"_s, QJsonArray{}}, {u"ime"_s, true}, {u"accessibility"_s, true}};
   welcomed_ = false;
-  helloRequest_ = engine_.request(u"hello"_s, QJsonObject{
-                                                  {u"protocol_versions"_s, QJsonArray{Engine::kProtocolVersion}},
-                                                  {u"shell"_s, shell},
-                                                  {u"capabilities"_s, capabilities},
-                                                  {u"locale"_s, QLocale().bcp47Name()},
-                                                  {u"theme"_s, themeName()},
-                                              });
+  helloRequest_ = request(u"hello"_s, QJsonObject{
+                                          {u"protocol_versions"_s, QJsonArray{Engine::kProtocolVersion}},
+                                          {u"shell"_s, shell},
+                                          {u"capabilities"_s, capabilities},
+                                          {u"locale"_s, QLocale().bcp47Name()},
+                                          {u"theme"_s, themeName()},
+                                      });
   if (helloRequest_ == 0) {
     fail();
   }
@@ -74,44 +142,31 @@ void DocumentSession::reopen() {
   }
 }
 
-qint64 DocumentSession::currentCause() const {
-  // The v0 engine answers every request before it sends the events that handling it caused (see the file comment of documentsession.h: the
-  // protocol states it only for view.set), and every message the session sends is a request. So an event belongs to the request whose reply
-  // arrived last. Before any reply, assume the worst: the last request posted.
-  return lastReply_ > 0 ? lastReply_ : engine_.lastPostedRequest();
-}
-
 void DocumentSession::onReply(qint64 requestId, bool ok, const QJsonObject &payload, const QJsonObject &error) {
-  lastReply_ = requestId;
-  // Nothing after the stop, and nothing for an earlier session: a request sent before this session's hello was answered by the session the
-  // engine discarded, or with handshake_required by this one before its handshake (engine protocol §12.1, point 4).
-  if (status_ == Status::Failed || requestId < helloRequest_) {
+  // Nothing after the stop.
+  if (status_ == Status::Failed) {
     return;
   }
-  // The engine panicked while handling the request. It has discarded its session, and the engine.error that follows decides what happens
-  // (§12.1, point 4), so the reply itself changes nothing, except that the engine is done with the document's bytes; a document whose
-  // doc.open it answers still counts as being opened until the engine.error closes it (§12.1, point 3). The code is read only to recognise
-  // the reply; nothing of the error is shown.
-  if (!ok && error.value(u"code"_s).toString() == u"panic"_s) {
-    if (requestId == openRequest_) {
-      openRequest_ = 0;
-      releaseDocumentBlob();
-    }
+  // The error panic in reply to doc.open: the engine is done with the document's bytes, and the document counts as being opened until the
+  // engine.error that follows closes it (engine protocol §12.1, point 3). The code is read only to recognise the reply; nothing of the
+  // error is shown.
+  if (!ok && requestId == openRequest_ && error.value(u"code"_s).toString() == u"panic"_s) {
+    openRequest_ = 0;
+    releaseDocumentBlob();
+  }
+  if (tracker_.reply(requestId, ok, payload, error).action != SessionTracker::Action::Handle) {
     return;
   }
   if (requestId == helloRequest_) {
-    if (ok) {
-      onWelcome(payload);
-    } else {
-      fail();
-    }
+    onHelloReply(ok, payload, error);
+  } else if (requestId == manifestRequest_) {
+    manifestRequest_ = 0;
+    onManifestReply(ok, payload);
   } else if (requestId == openRequest_) {
     onOpenReply(ok, payload);
   } else if (const auto view = std::ranges::find(viewRequests_, requestId); view != viewRequests_.end()) {
     viewRequests_.erase(view);
-    if (!ok) {
-      fail();
-    }
+    // A view the engine refused breaks nothing (engine protocol §14.1 item 4): the canvas keeps showing what it has.
   } else if (requestId == accessibilityRequest_) {
     accessibilityRequest_ = 0;
     if (ok) {
@@ -122,9 +177,62 @@ void DocumentSession::onReply(qint64 requestId, bool ok, const QJsonObject &payl
       accessibilityCaret_.reset();
       emit accessibilityChanged({});
     }
+  } else if (accessibilityParts_.contains(requestId)) {
+    addAccessibilityPart(requestId, ok, payload);
   } else if (!ok) {
     emit inputRefused(error.value(u"code"_s).toString());
   }
+}
+
+void DocumentSession::onHelloReply(bool ok, const QJsonObject &payload, const QJsonObject &error) {
+  if (!ok) {
+    // A refused hello is not a failure that a new session repairs, so the session stops without another hello (engine protocol §14.1
+    // item 3). unsupported_protocol_version is the one refusal the user can fix: the app and its engine do not fit together, so the
+    // installation is incomplete and must be updated or reinstalled. There is no update action yet (DESK-104).
+    forgetSession(documentId_ > 0 || opening_);
+    if (error.value(u"code"_s).toString() == u"unsupported_protocol_version"_s) {
+      updateRequired_ = true;
+      stop(tr("This installation of BayanDocs is incomplete: the app and its document engine do not fit together. Update BayanDocs, or "
+              "install it again."));
+    } else {
+      stop(stopMessage());
+    }
+    return;
+  }
+  // The session's version is the one the shell offered; a welcome that names another breaks the protocol (§14.1 item 3).
+  const auto welcome = protocol::parseWelcome(payload);
+  if (!welcome || welcome->protocolVersion != Engine::kProtocolVersion) {
+    fail();
+    return;
+  }
+  welcomed_ = true;
+  engineVersion_ = welcome->engineVersion;
+  features_ = welcome->features;
+  emit statusChanged();
+  // The key data that decide which presses reach the engine (§14.3); the engine resolves them for the platform and runtime of hello.
+  manifestRequest_ = request(u"ui.manifest"_s, QJsonObject{{u"locale"_s, QLocale().bcp47Name()}});
+  if (manifestRequest_ == 0) {
+    fail();
+    return;
+  }
+  if (openWhenWelcomed_) {
+    openDocument();
+  }
+}
+
+void DocumentSession::onManifestReply(bool ok, const QJsonObject &payload) {
+  if (!ok) {
+    // An error in this reply ends nothing (engine protocol §14.1 item 4): without key data no press goes to the engine, and typed text
+    // still does.
+    return;
+  }
+  auto manifest = protocol::parseUiManifest(payload);
+  if (!manifest) {
+    fail();
+    return;
+  }
+  keyBindings_ = KeyBindings(std::move(*manifest));
+  emit keyBindingsChanged();
 }
 
 void DocumentSession::onOpenReply(bool ok, const QJsonObject &payload) {
@@ -141,25 +249,12 @@ void DocumentSession::onOpenReply(bool ok, const QJsonObject &payload) {
   onOpened(payload);
 }
 
-void DocumentSession::onWelcome(const QJsonObject &payload) {
-  welcomed_ = true;
-  engineVersion_ = payload.value(u"engine_version"_s).toString();
-  features_.clear();
-  for (const auto &feature : payload.value(u"features"_s).toArray()) {
-    features_.append(feature.toString());
-  }
-  emit statusChanged();
-  if (openWhenWelcomed_) {
-    openDocument();
-  }
-}
-
 void DocumentSession::openDocument() {
   openWhenWelcomed_ = false;
-  // Placeholder until opening and creating documents exist: an empty blob stands for a new blank document. The v0 engine opens its mock
+  // Placeholder until opening and creating documents exist: an empty blob stands for a new blank document. The engine opens its mock
   // document whatever the blob holds, and the stub engine its test page.
   documentBlob_ = engine_.putBlob(QByteArray());
-  openRequest_ = documentBlob_ == 0 ? 0 : engine_.request(u"doc.open"_s, QJsonObject{{u"blob"_s, static_cast<qint64>(documentBlob_)}});
+  openRequest_ = documentBlob_ == 0 ? 0 : request(u"doc.open"_s, QJsonObject{{u"blob"_s, static_cast<qint64>(documentBlob_)}});
   if (openRequest_ == 0) {
     fail();
     return;
@@ -169,13 +264,16 @@ void DocumentSession::openDocument() {
 }
 
 void DocumentSession::onOpened(const QJsonObject &payload) {
-  documentId_ = payload.value(u"doc_id"_s).toInteger(0);
-  if (documentId_ <= 0) {
+  // doc.opened's required fields (engine protocol §6.1, §14.6): the document, its render revision, and the estimate, the warnings and the
+  // fonts, which the shell does not show yet.
+  documentId_ = documentIdOf(payload);
+  if (documentId_ <= 0 || !protocol::parseRevision(payload.value(u"revision"_s)) || !payload.value(u"page_count_estimate"_s).isDouble() ||
+      !payload.value(u"warnings"_s).isArray() || !payload.value(u"fonts"_s).isObject()) {
     fail();
     return;
   }
   sendView();
-  accessibilityRequest_ = engine_.request(u"query.a11y"_s, QJsonObject{{u"doc_id"_s, documentId_}});
+  accessibilityRequest_ = request(u"query.a11y"_s, QJsonObject{{u"doc_id"_s, documentId_}});
   if (accessibilityRequest_ == 0) {
     fail();
   }
@@ -192,49 +290,84 @@ void DocumentSession::sendView() {
   if (sentView_ == view_) {
     return;
   }
-  const qint64 request = engine_.request(u"view.set"_s, QJsonObject{
-                                                            {u"doc_id"_s, documentId_},
-                                                            {u"viewport"_s, toJson(view_.viewport)},
-                                                            {u"zoom"_s, view_.zoom},
-                                                            {u"device_scale"_s, view_.deviceScale},
-                                                            {u"mode"_s, u"print"_s},
-                                                            {u"show_formatting_marks"_s, false},
-                                                        });
-  if (request == 0) {
+  // In print mode a new viewport, zoom or device scale invalidates nothing (engine protocol §14.6 item 2): tiles are requested for a scale,
+  // and the canvas requests those of a new scale by itself.
+  const qint64 id = request(u"view.set"_s, QJsonObject{
+                                               {u"doc_id"_s, documentId_},
+                                               {u"viewport"_s, toJson(view_.viewport)},
+                                               {u"zoom"_s, view_.zoom},
+                                               {u"device_scale"_s, view_.deviceScale},
+                                               {u"mode"_s, u"print"_s},
+                                               {u"show_formatting_marks"_s, false},
+                                           });
+  if (id == 0) {
     fail();
     return;
   }
-  viewRequests_.push_back(request);
+  viewRequests_.push_back(id);
   sentView_ = view_;
 }
 
 void DocumentSession::onEvent(const QString &type, const QJsonObject &payload) {
+  if (status_ == Status::Failed) {
+    return;
+  }
+  const SessionTracker::Decision decision = tracker_.event(type, payload);
+  switch (decision.action) {
+  case SessionTracker::Action::Ignore:
+    return;
+  case SessionTracker::Action::Stop:
+    fail();
+    return;
+  case SessionTracker::Action::Restart:
+    recover(decision.restart);
+    return;
+  case SessionTracker::Action::Handle:
+    break;
+  }
   if (type == u"engine.error"_s) {
-    // Only recoverable decides, and anything but true means that the engine discarded its session (engine protocol §12.1).
-    if (!payload.value(u"recoverable"_s).toBool(false)) {
-      recover();
+    // An error the engine recovered from, such as the refusal of a message without an identifier, ends nothing (§14.1 item 4). Its fields
+    // must still have their types.
+    if (!payload.value(u"code"_s).isString() || !payload.value(u"message_id"_s).isString() || !payload.value(u"args"_s).isObject()) {
+      fail();
     }
     return;
   }
-  // Every other event the session handles concerns the open document.
-  if (status_ == Status::Failed || documentId_ <= 0 || payload.value(u"doc_id"_s).toInteger(0) != documentId_) {
+  // The other events the session reads concern the open document; the tracker has ignored those about documents of earlier sessions. Other
+  // events (view.layout.progress, and any the engine adds later) are ignored, as the protocol requires for unknown ones (§9).
+  const bool read = type == u"view.pages"_s || type == u"render.invalidate"_s || type == u"overlay.update"_s || type == u"a11y.update"_s;
+  if (!read) {
+    return;
+  }
+  const qint64 document = documentIdOf(payload);
+  if (document == 0) {
+    // A doc_id that is no document identifier breaks the protocol.
+    fail();
+    return;
+  }
+  if (document != documentId_) {
     return;
   }
   if (type == u"view.pages"_s) {
     setPages(payload);
   } else if (type == u"render.invalidate"_s) {
-    const auto regions = protocol::parseRegions(payload.value(u"regions"_s).toArray(), pageCount());
-    if (!regions || !payload.value(u"regions"_s).isArray()) {
-      fail();
-      return;
-    }
-    emit invalidated(*regions, currentCause());
+    onInvalidate(payload);
   } else if (type == u"overlay.update"_s) {
     setOverlay(payload);
-  } else if (type == u"a11y.update"_s) {
+  } else {
     applyAccessibilityUpdate(payload);
   }
-  // Other events (view.layout.progress, and any the engine adds later) are ignored, as the protocol requires for unknown ones (§9).
+}
+
+void DocumentSession::onInvalidate(const QJsonObject &payload) {
+  const auto revision = protocol::parseRevision(payload.value(u"revision"_s));
+  const QJsonValue list = payload.value(u"regions"_s);
+  const auto regions = protocol::parseRegions(list.toArray(), pageCount());
+  if (!revision || !regions || !list.isArray()) {
+    fail();
+    return;
+  }
+  emit invalidated(*regions, *revision);
 }
 
 void DocumentSession::setPages(const QJsonObject &payload) {
@@ -270,15 +403,91 @@ void DocumentSession::setOverlay(const QJsonObject &payload) {
 }
 
 void DocumentSession::setAccessibilityTree(const QJsonObject &payload) {
+  // A tree beyond the protocol's limits, or one the session cannot read, breaks the protocol (engine protocol §14.7 item 1).
   auto tree = protocol::parseAccessibleTree(payload.value(u"root"_s), pageCount());
   const auto caret = protocol::parseAccessibleCaret(payload.value(u"caret"_s));
-  if (payload.value(u"doc_id"_s).toInteger(0) != documentId_ || !tree || !caret) {
-    // A tree the shell cannot read is dropped rather than half-trusted; the document stays usable without it.
-    accessibilityTree_.reset();
-    accessibilityCaret_.reset();
-  } else {
-    accessibilityTree_ = std::move(*tree);
-    accessibilityCaret_ = *caret;
+  if (documentIdOf(payload) != documentId_ || !tree || !caret) {
+    fail();
+    return;
+  }
+  accessibilityTree_ = std::move(*tree);
+  accessibilityCaret_ = *caret;
+  accessibilityParts_.clear();
+  refusedParts_.clear();
+  emit accessibilityChanged({});
+  loadAccessibilityParts();
+}
+
+void DocumentSession::addAccessibilityPart(qint64 requestId, bool ok, const QJsonObject &payload) {
+  const protocol::MissingChildren asked = accessibilityParts_.extract(requestId).mapped();
+  const protocol::AccessibleNode *node = accessibilityTree_ ? accessibilityTree_->find(asked.node) : nullptr;
+  if (!ok) {
+    // An error here ends nothing (engine protocol §14.1 item 4). The range is not asked for again until the tree or the node changes, so
+    // that a refusal cannot make the session ask for ever; screen readers lack those children meanwhile.
+    refusedParts_.emplace(asked.node, asked.start);
+    loadAccessibilityParts();
+    return;
+  }
+  if (!accessibilityTree_ || node == nullptr) {
+    // An a11y.update has replaced the node meanwhile, and the session asked for that one's parts anew if it lacks any.
+    loadAccessibilityParts();
+    return;
+  }
+  protocol::AccessibleTree &tree = *accessibilityTree_;
+  auto part = protocol::parseAccessibleTree(payload.value(u"root"_s), pageCount(), tree.levelOf(asked.node));
+  const auto caret = protocol::parseAccessibleCaret(payload.value(u"caret"_s));
+  if (documentIdOf(payload) != documentId_ || !part || !caret || part->root().id != asked.node) {
+    fail();
+    return;
+  }
+  if (!tree.addChildren(*part)) {
+    // The part does not fit the tree as the session has it: start again from the whole tree.
+    reloadAccessibilityTree();
+    return;
+  }
+  accessibilityCaret_ = *caret;
+  emit accessibilityChanged({asked.node});
+  loadAccessibilityParts();
+}
+
+void DocumentSession::loadAccessibilityParts() {
+  if (!accessibilityTree_ || accessibilityRequest_ != 0) {
+    return;
+  }
+  for (const protocol::MissingChildren &missing : accessibilityTree_->missingChildren()) {
+    if (accessibilityParts_.size() >= kMaxPartRequests) {
+      return;
+    }
+    // A range already asked for is not asked for again; its answer brings as many children as fit, and the rest are asked for then.
+    const bool asked = std::ranges::any_of(accessibilityParts_, [&missing](const auto &part) {
+      return part.second.node == missing.node && part.second.start == missing.start;
+    });
+    if (asked || refusedParts_.contains({missing.node, missing.start})) {
+      continue;
+    }
+    const qint64 id =
+        request(u"query.a11y"_s, QJsonObject{
+                                     {u"doc_id"_s, documentId_},
+                                     {u"node"_s, static_cast<qint64>(missing.node)},
+                                     {u"children"_s, QJsonObject{{u"start"_s, qint64{missing.start}}, {u"count"_s, qint64{missing.count}}}},
+                                 });
+    if (id == 0) {
+      fail();
+      return;
+    }
+    accessibilityParts_.emplace(id, missing);
+  }
+}
+
+void DocumentSession::reloadAccessibilityTree() {
+  accessibilityTree_.reset();
+  accessibilityCaret_.reset();
+  accessibilityParts_.clear();
+  refusedParts_.clear();
+  accessibilityRequest_ = request(u"query.a11y"_s, QJsonObject{{u"doc_id"_s, documentId_}});
+  if (accessibilityRequest_ == 0) {
+    fail();
+    return;
   }
   emit accessibilityChanged({});
 }
@@ -288,28 +497,53 @@ void DocumentSession::applyAccessibilityUpdate(const QJsonObject &payload) {
     // No tree yet, or a fresh one is on its way and will include this change.
     return;
   }
+  const QJsonValue changes = payload.value(u"changes"_s);
+  const auto caret = protocol::parseAccessibleCaret(payload.value(u"caret"_s));
+  if (!changes.isArray() || !caret) {
+    fail();
+    return;
+  }
   QList<quint64> changed;
-  bool understood = payload.value(u"changes"_s).isArray();
-  for (const auto &change : payload.value(u"changes"_s).toArray()) {
+  for (const auto &change : changes.toArray()) {
     const QJsonObject object = change.toObject();
-    const auto subtree = protocol::parseAccessibleTree(object.value(u"node"_s), pageCount());
-    if (object.value(u"kind"_s).toString() != u"replace"_s || !subtree || !accessibilityTree_->replace(*subtree)) {
-      understood = false;
-      break;
+    const QJsonValue node = object.value(u"node"_s);
+    if (!change.isObject() || !object.value(u"kind"_s).isString()) {
+      fail();
+      return;
+    }
+    if (object.value(u"kind"_s).toString() != u"replace"_s) {
+      // A kind of change this shell does not know: its tree can no longer be trusted to match the engine's.
+      reloadAccessibilityTree();
+      return;
+    }
+    const quint64 id = static_cast<quint64>(std::max<qint64>(0, node.toObject().value(u"id"_s).toInteger(0)));
+    const int level = accessibilityTree_->levelOf(id);
+    // A change to a node makes its parts worth asking for again.
+    std::erase_if(refusedParts_, [id](const auto &refused) { return refused.first == id; });
+    if (level == 0) {
+      // A node that the tree does not hold: one in a part still being loaded, whose answer will hold it as it is now, or one that the
+      // session's tree lacks for another reason, and then the whole tree is asked for again.
+      if (accessibilityParts_.empty()) {
+        reloadAccessibilityTree();
+        return;
+      }
+      continue;
+    }
+    // Each change is within the limits too, counted from the replaced node's level (engine protocol §14.7 item 1).
+    const auto subtree = protocol::parseAccessibleTree(node, pageCount(), level);
+    if (!subtree) {
+      fail();
+      return;
+    }
+    if (!accessibilityTree_->replace(*subtree)) {
+      reloadAccessibilityTree();
+      return;
     }
     changed.append(subtree->root().id);
   }
-  const auto caret = protocol::parseAccessibleCaret(payload.value(u"caret"_s));
-  if (!understood || !caret) {
-    // The tree can no longer be trusted to match the engine's: ask for all of it again.
-    accessibilityTree_.reset();
-    accessibilityCaret_.reset();
-    accessibilityRequest_ = engine_.request(u"query.a11y"_s, QJsonObject{{u"doc_id"_s, documentId_}});
-    emit accessibilityChanged({});
-    return;
-  }
   accessibilityCaret_ = *caret;
   emit accessibilityChanged(changed);
+  loadAccessibilityParts();
 }
 
 qint64 DocumentSession::sendForDocument(const QString &type, QJsonObject payload) {
@@ -317,7 +551,7 @@ qint64 DocumentSession::sendForDocument(const QString &type, QJsonObject payload
     return 0;
   }
   payload.insert(u"doc_id"_s, documentId_);
-  return engine_.request(type, payload);
+  return request(type, payload);
 }
 
 qint64 DocumentSession::sendKey(const protocol::KeyInput &key) { return sendForDocument(u"input.key"_s, protocol::keyPayload(key)); }
@@ -332,9 +566,9 @@ qint64 DocumentSession::sendPointer(const protocol::PointerInput &pointer) {
   return sendForDocument(u"input.pointer"_s, protocol::pointerPayload(pointer));
 }
 
-void DocumentSession::recover() {
-  if (status_ == Status::Failed || helloRequest_ == 0) {
-    // Stopped already, or never started: there is no session to recover.
+void DocumentSession::recover(const SessionTracker::Restart &restart) {
+  if (helloRequest_ == 0) {
+    // Never started: there is no session to recover.
     return;
   }
   // What the failure closed decides the message and the offer (engine protocol §12.1, points 2 and 3): the document that was open or being
@@ -344,11 +578,6 @@ void DocumentSession::recover() {
   const Offer pending = offer_ != Offer::None ? offer_ : taken_;
   const Offer offer = closed || pending == Offer::Reopen ? Offer::Reopen : Offer::Open;
   forgetSession(closed);
-  const std::optional<int> restart = restarts_.take();
-  if (!restart) {
-    stop(tr("The engine stopped working again, so it was not restarted. Close BayanDocs and open it again to restart the engine."));
-    return;
-  }
   QString documentState;
   if (closed) {
     documentState = tr("The document was closed and can be reopened.");
@@ -359,8 +588,10 @@ void DocumentSession::recover() {
   }
   setOffer(offer);
   setStatus(Status::Closed);
+  // Which restart this is comes from the engine, whose binding counts them (§14.2); "1 of 3", so that a screen reader announces a second
+  // restart too instead of skipping words it has just read.
   setMessage(tr("The engine stopped working and was restarted (%1 of %2). %3")
-                 .arg(QString::number(*restart), QString::number(RestartAllowance::kMaxRestarts), documentState));
+                 .arg(QString::number(restart.number), QString::number(restart.limit), documentState));
   // A new session, without the document: doc.open waits for the user (§12.1, point 3).
   startSession();
 }
@@ -372,8 +603,11 @@ void DocumentSession::forgetSession(bool closesDocument) {
   opening_ = false;
   taken_ = Offer::None;
   documentId_ = 0;
+  manifestRequest_ = 0;
   openRequest_ = 0;
   accessibilityRequest_ = 0;
+  accessibilityParts_.clear();
+  refusedParts_.clear();
   viewRequests_.clear();
   // The next document gets its own view.set.
   sentView_.reset();
@@ -403,7 +637,7 @@ void DocumentSession::fail() {
     return;
   }
   forgetSession(documentId_ > 0 || opening_);
-  stop(tr("The engine stopped. Close BayanDocs and open it again to restart the engine."));
+  stop(stopMessage());
 }
 
 void DocumentSession::stop(const QString &message) {

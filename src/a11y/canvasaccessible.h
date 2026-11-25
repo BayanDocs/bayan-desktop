@@ -6,7 +6,7 @@
 // character, word, line and paragraph, follow the caret, and learn where each character is on the screen. Editing through accessibility
 // (inserting or deleting text next to the caret) is relayed to the engine as input, because the engine decides what the edit does.
 //
-// What protocol v0 cannot answer is left out on purpose and listed in the DESK-002 report: moving the caret to an offset
+// What protocol v1 cannot answer is left out on purpose and listed in the DESK-002 report: moving the caret to an offset
 // (setCursorPosition), selections, and finding the character at a screen point (offsetAtPoint), which would need the engine's hit-testing
 // (engine protocol §7).
 

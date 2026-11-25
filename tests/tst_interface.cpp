@@ -1,15 +1,18 @@
 // Tests of the interface in QML (src/qml) around the document canvas, against the engine the build links: the "Pages" item before the
 // canvas and its scrolling keys, the zoom buttons and their announcements (ADR-0020 §5), plain text for engine strings (threat T18), and
-// what the interface shows, announces and does with keyboard focus after engine failures (engine protocol §12.1). They load Main.qml as the
-// application does and run on the offscreen platform, where screen readers are played by recording Qt's accessibility events.
+// what the interface shows, announces and does with keyboard focus after engine failures (engine protocol §12.1, §14.2) and when the app
+// and its engine do not fit together (§14.1 item 3). They load Main.qml as the application does and run on the offscreen platform, where
+// screen readers are played by recording Qt's accessibility events.
 
 #include "canvasaccessible.h"
 #include "documentcanvas.h"
 #include "documentsession.h"
 #include "engine.h"
+#include "enginemessages.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
+#include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
 #include <QtCore/QJsonValue>
 #include <QtCore/QTemporaryDir>
@@ -40,15 +43,25 @@ using Status = bayan::DocumentSession::Status;
 // Whether the linked engine is the stub, which reports a version ending in -stub (also as the stand-in SDK of scripts/test-engine-sdk.sh).
 bool isStub() { return bayan::Engine::version().endsWith(u"-stub"_s); }
 
-QJsonObject allowPanic() { return QJsonObject{{u"test"_s, QJsonObject{{u"allow_panic"_s, true}}}}; }
+// The configuration that lets diag.panic make the engine fail (engine protocol §3.3); for the stub, with the restart values that the real
+// engine's binding gives four failures within ten minutes (§14.2).
+QJsonObject allowPanic() {
+  QJsonObject test{{u"allow_panic"_s, true}};
+  if (isStub()) {
+    const auto restart = [](int number) { return QJsonObject{{u"number"_s, number}, {u"limit"_s, 3}}; };
+    test.insert(u"restarts"_s, QJsonArray{restart(1), restart(2), restart(3), QJsonValue::Null});
+  }
+  return QJsonObject{{u"test"_s, test}};
+}
 
 QString restarted(int restart, const QString &document) {
   return u"The engine stopped working and was restarted (%1 of 3). %2"_s.arg(restart).arg(document);
 }
 const QString closedNow = u"The document was closed and can be reopened."_s;
 const QString stillClosed = u"The document is still closed and can be reopened."_s;
-const QString stoppedAgain =
-    u"The engine stopped working again, so it was not restarted. Close BayanDocs and open it again to restart the engine."_s;
+const QString stopped = u"The engine stopped. Close BayanDocs and open it again to restart the engine."_s;
+const QString updatePrompt =
+    u"This installation of BayanDocs is incomplete: the app and its document engine do not fit together. Update BayanDocs, or install it again."_s;
 
 // The announcements screen readers would read (QAccessibleAnnouncementEvent, which QML's Accessible.announce sends), recorded while an
 // Announcements object exists.
@@ -105,8 +118,9 @@ struct Interface {
   [[nodiscard]] QQuickItem *item(const QString &name) const { return window->findChild<QQuickItem *>(name); }
 };
 
-// Opens the interface on an engine with this configuration and waits until it shows the document with keyboard focus in it.
-std::unique_ptr<Interface> openInterface(const QJsonObject &config = {}) {
+// Opens the interface on an engine with this configuration and, unless told not to, waits until it shows the document with keyboard focus
+// in it.
+std::unique_ptr<Interface> openInterface(const QJsonObject &config = {}, bool waitForTheDocument = true) {
   auto ui = std::make_unique<Interface>();
   ui->engine = bayan::Engine::create(config);
   if (!ui->engine) {
@@ -135,6 +149,9 @@ std::unique_ptr<Interface> openInterface(const QJsonObject &config = {}) {
   }
   ui->session->start();
   ui->window->requestActivate();
+  if (!waitForTheDocument) {
+    return ui;
+  }
   if (!QTest::qWaitFor([&ui] { return ui->session->status() == Status::Ready && ui->canvas->tilesComplete(); }) ||
       !QTest::qWaitFor([&ui] { return ui->canvas->hasActiveFocus(); })) {
     return nullptr;
@@ -182,6 +199,7 @@ private slots:
   void failuresAreShownAndAnnouncedAndKeepFocusInThePages();
   void aCompositionInProgressNeverReachesAFailedEngine();
   void focusOnTheOfferGoesToThePagesWhenTheOfferGoes();
+  void anEngineThatDoesNotFitAsksForAnUpdate();
 };
 
 void TestInterface::initTestCase() {
@@ -383,12 +401,12 @@ void TestInterface::failuresAreShownAndAnnouncedAndKeepFocusInThePages() {
   QTRY_COMPARE(message->property("text").toString(), restarted(3, stillClosed));
   QVERIFY(offer->isVisible());
   QVERIFY(engine.post(u"diag.panic"_s));
-  QTRY_COMPARE(message->property("text").toString(), stoppedAgain);
+  QTRY_COMPARE(message->property("text").toString(), stopped);
   QCOMPARE(ui->session->status(), Status::Failed);
   QVERIFY(!offer->isVisible());
   QVERIFY(ui->pages->hasActiveFocus());
   QCOMPARE(status->property("text").toString(), u"Engine stopped"_s);
-  QCOMPARE(Announcements::messages().mid(3), (QStringList{restarted(2, closedNow), restarted(3, stillClosed), stoppedAgain}));
+  QCOMPARE(Announcements::messages().mid(3), (QStringList{restarted(2, closedNow), restarted(3, stillClosed), stopped}));
 }
 
 void TestInterface::aCompositionInProgressNeverReachesAFailedEngine() {
@@ -412,9 +430,11 @@ void TestInterface::aCompositionInProgressNeverReachesAFailedEngine() {
     QTRY_COMPARE(ui->session->message(), restarted(restart, closedNow));
     QTRY_VERIFY(ui->pages->hasActiveFocus());
     QVERIFY(!ui->canvas->composing());
-    QTest::qWait(200);
     QVERIFY(ui->postedBeforeFailure > 0);
-    QCOMPARE(engine.lastPostedRequest(), ui->postedBeforeFailure + 1); // The new session's hello, nothing else.
+    // The new session's hello and, once the restarted engine has welcomed it, its request for the manifest's key data; nothing else.
+    QTRY_COMPARE(engine.lastPostedRequest(), ui->postedBeforeFailure + 2);
+    QTest::qWait(200);
+    QCOMPARE(engine.lastPostedRequest(), ui->postedBeforeFailure + 2);
     ui->session->reopen();
     QTRY_COMPARE(ui->session->status(), Status::Ready);
     ui->canvas->forceActiveFocus(Qt::MouseFocusReason);
@@ -456,6 +476,63 @@ void TestInterface::focusOnTheOfferGoesToThePagesWhenTheOfferGoes() {
   QVERIFY(!offer->isVisible());
   QTRY_COMPARE(ui->window->activeFocusItem(), ui->pages);
   QVERIFY(!offer->hasActiveFocus());
+}
+
+void TestInterface::anEngineThatDoesNotFitAsksForAnUpdate() {
+  if (!isStub()) {
+    QSKIP("Needs the stub's hello test switch, so that the test answers hello itself.");
+  }
+  // An engine that refuses hello with unsupported_protocol_version cannot work with this app at all (engine protocol §14.1 item 3): the
+  // interface shows the update prompt in place of the document and announces it to screen readers. Any other refusal of hello gives the
+  // stop message. Either way nothing is offered.
+  struct Refusal {
+    QString code;
+    QJsonObject args;
+    QString message;
+    QString status;
+  };
+  for (const Refusal &item : {
+           Refusal{
+               .code = u"unsupported_protocol_version"_s,
+               .args = QJsonObject{{u"supported"_s, QJsonArray{2}}},
+               .message = updatePrompt,
+               .status = u"Update needed"_s,
+           },
+           Refusal{
+               .code = u"invalid_request"_s,
+               .args = QJsonObject{{u"type"_s, u"hello"_s}},
+               .message = stopped,
+               .status = u"Engine stopped"_s,
+           },
+       }) {
+    const Announcements announcements;
+    const auto ui = openInterface(QJsonObject{{u"test"_s, QJsonObject{{u"hello"_s, u"ignore"_s}}}}, false);
+    QVERIFY(ui);
+    QQuickItem *message = ui->item(u"sessionMessage"_s);
+    QQuickItem *offer = ui->item(u"offerButton"_s);
+    QQuickItem *status = ui->item(u"statusText"_s);
+    QVERIFY(message != nullptr && offer != nullptr && status != nullptr);
+    const qint64 hello = ui->engine->lastPostedRequest();
+    QVERIFY(hello > 0);
+    QString messageId = u"engine-error-"_s + item.code;
+    messageId.replace(u'_', u'-');
+    const QJsonObject refusal{
+        {u"v"_s, 1},
+        {u"re"_s, hello},
+        {u"ok"_s, false},
+        {u"error"_s, QJsonObject{{u"code"_s, item.code}, {u"message_id"_s, messageId}, {u"args"_s, item.args}}},
+    };
+    QVERIFY(bayan::test::deliver(*ui->engine, refusal, u"hello"_s));
+    QTRY_COMPARE(ui->session->status(), Status::Failed);
+    QTRY_COMPARE(message->property("text").toString(), item.message);
+    QVERIFY(message->isVisible());
+    QVERIFY(!offer->isVisible());
+    QVERIFY(!ui->canvas->isVisible());
+    QCOMPARE(status->property("text").toString(), item.status);
+    QTRY_COMPARE(Announcements::messages(), QStringList{item.message});
+    QTest::qWait(100);
+    QCOMPARE(ui->engine->lastPostedRequest(), hello); // No second hello, and nothing else.
+  }
 }
 
 QTEST_MAIN(TestInterface)

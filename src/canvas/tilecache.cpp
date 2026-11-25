@@ -91,7 +91,7 @@ void TileCache::setImage(Entry &entry, const QImage &image) {
   ++entry.version;
 }
 
-bool TileCache::deliver(const TileKey &key, const QImage &image, qint64 renderedAfter) {
+bool TileCache::deliver(const TileKey &key, const QImage &image, quint64 revision) {
   const auto found = entries_.find(key);
   if (found == entries_.end()) {
     return false;
@@ -103,26 +103,26 @@ bool TileCache::deliver(const TileKey &key, const QImage &image, qint64 rendered
   }
   setImage(entry, image);
   entry.failures = 0;
-  entry.renderedAfter = renderedAfter;
-  entry.dirty = changedSince(key.page, entry.rect, renderedAfter);
+  entry.revision = revision;
+  entry.dirty = changedSince(key.page, entry.rect, revision);
   return true;
 }
 
-bool TileCache::changedSince(int page, const protocol::BluRect &rect, qint64 renderedAfter) const {
-  if (renderedAfter < forgottenUpTo_) {
+bool TileCache::changedSince(int page, const protocol::BluRect &rect, quint64 revision) const {
+  if (revision < forgottenUpTo_) {
     return true;
   }
   return std::ranges::any_of(recent_, [&](const Invalidation &invalidation) {
-    return invalidation.page == page && invalidation.cause > renderedAfter &&
+    return invalidation.page == page && invalidation.revision > revision &&
            std::ranges::any_of(invalidation.rects, [&](const protocol::BluRect &changed) { return changed.intersects(rect); });
   });
 }
 
-void TileCache::invalidate(int page, const std::vector<protocol::BluRect> &rects, qint64 cause) {
+void TileCache::invalidate(int page, const std::vector<protocol::BluRect> &rects, quint64 revision) {
   // Marking a tile dirty that did not change costs a render, never a wrong picture.
   std::vector<protocol::BluRect> changed = rects.size() <= kMaxRectsPerInvalidation ? rects : std::vector{boundingRect(rects)};
   for (auto &[key, entry] : entries_) {
-    if (key.page != page || entry.renderedAfter >= cause) {
+    if (key.page != page || entry.revision >= revision) {
       continue;
     }
     if (std::ranges::any_of(changed, [&entry](const protocol::BluRect &rect) { return rect.intersects(entry.rect); })) {
@@ -130,9 +130,9 @@ void TileCache::invalidate(int page, const std::vector<protocol::BluRect> &rects
       entry.failures = 0;
     }
   }
-  recent_.push_back({.page = page, .rects = std::move(changed), .cause = cause});
+  recent_.push_back({.page = page, .rects = std::move(changed), .revision = revision});
   while (recent_.size() > kRememberedInvalidations) {
-    forgottenUpTo_ = std::max(forgottenUpTo_, recent_.front().cause);
+    forgottenUpTo_ = std::max(forgottenUpTo_, recent_.front().revision);
     recent_.pop_front();
   }
 }

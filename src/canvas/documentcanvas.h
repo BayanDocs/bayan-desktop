@@ -3,17 +3,19 @@
 // - Tiles: the canvas works out which tiles of which pages the view needs at the current zoom and screen density (TileGrid,
 //   ViewGeometry), asks the tile thread to render them (TileRenderer), keeps them (TileCache) and puts them into Qt Quick's scene graph as
 //   textures, each uploaded once and moved, not redrawn, while the view scrolls. Tiles land on whole device pixels, so they stay sharp at
-//   fractional scaling on Windows and on Retina screens.
+//   fractional scaling on Windows and on Retina screens. Each tile shows a render revision of the document, and is drawn again once an
+//   invalidation with a higher one covers it (engine protocol §14.6); tiles of a new scale are asked for by the canvas itself, since a new
+//   zoom invalidates nothing.
 // - Zoom: while the zoom changes (pinch, Control+wheel, the Zoom in and Zoom out buttons), the canvas stretches the tiles it has, and once
 //   the zoom has settled it asks for tiles at the new zoom, showing the stretched ones until the new ones arrive.
 // - Overlays: the caret and the selection come from overlay.update and are drawn over the tiles; the caret blinks here, so blinking never
 //   re-renders a page (architecture §8).
 // - Input: keys, pointer events and input-method composition go to the engine as input messages (KeyMapping, ImeTranslator), and the
-//   input method learns the caret's position and the text around it from the engine's overlay and accessibility tree. Every key but Tab
-//   goes to the engine, with its modifiers: the shell binds none, so that it hides no shortcut from the engine. The web shell sends fewer
-//   keys today, so the two shells do not send the engine the same keys; engine protocol v1 (§14.3) and DESK-004 make them agree
-//   (keyPressEvent). The keyboard scrolls and zooms through the document area instead (DocumentArea.qml and Main.qml, with scrollWithKey,
-//   zoomIn and zoomOut), so both stay keyboard-operable (ADR-0020 §5).
+//   input method learns the caret's position and the text around it from the engine's overlay and accessibility tree. A key press goes to
+//   the engine as input.key exactly when the UI manifest's key data say so (KeyBindings, engine protocol §14.3), as in the web shell; typed
+//   text goes as input.text, and every other press goes on to Qt and the shell's own interface (keyPressEvent). The keyboard scrolls and
+//   zooms through the document area and the zoom buttons (DocumentArea.qml and Main.qml, with scrollWithKey, zoomIn and zoomOut), so both
+//   stay keyboard-operable (ADR-0020 §5).
 // - Accessibility: CanvasAccessible presents the engine's accessibility tree to screen readers; the canvas keeps its text (AccessibleText)
 //   and reports changes of the text and the caret.
 //
@@ -161,7 +163,7 @@ public:
   // Set when an accessibility interface for the canvas exists, which means a screen reader or a test is looking; until then the canvas
   // does not spend time reporting text changes.
   void setAccessibleInterfaceActive(bool active) { accessibleInterfaceActive_ = active; }
-  // Deletes text next to the caret, counted in UTF-16 code units, with Backspace and Delete keys: protocol v0 has no message that deletes
+  // Deletes text next to the caret, counted in UTF-16 code units, with Backspace and Delete keys: protocol v1 has no message that deletes
   // a range, so input methods and accessibility edits that replace text use this (see ImeTranslator). Deletes no more than the editable
   // text at the caret holds, and nothing without one.
   void deleteAroundCaret(int unitsBefore, int unitsAfter);
@@ -219,7 +221,10 @@ private:
   };
 
   void onPagesChanged();
-  void onInvalidated(const std::vector<protocol::PageRect> &regions, qint64 cause);
+  // The session's document closed, or another one opened: its tiles and revisions go, and tiles of the old document still on their way are
+  // dropped when they arrive, since the new document's revisions start again.
+  void forgetDocument();
+  void onInvalidated(const std::vector<protocol::PageRect> &regions, quint64 revision);
   void onOverlayChanged();
   void onAccessibilityChanged();
   void onTileRendered(const TileRenderer::Result &result);
@@ -262,6 +267,10 @@ private:
   QPointer<DocumentSession> session_;
   std::unique_ptr<TileRenderer> renderer_;
   TileCache cache_;
+  // Increases whenever the document changes; tiles rendered for an earlier generation are dropped (forgetDocument).
+  quint64 generation_ = 0;
+  // The session's document that the tiles show, or 0.
+  qint64 shownDocument_ = 0;
   std::vector<protocol::Page> tilePages_;
   int tileSize_ = TileGrid::kDefaultTileSize;
   // The zoom the user sees, and the zoom of the tiles asked for (equal once the zoom has settled).
